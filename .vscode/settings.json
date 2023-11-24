@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "*.embeddedhtml": "html",
+        "system_error": "c",
+        "ht.h": "c"
+    }
+}
