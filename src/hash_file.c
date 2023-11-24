@@ -93,6 +93,18 @@ HT_ErrorCode HT_OpenIndex(const char *fileName, int *indexDesc){
 	BF_Block_Init(&first_block);
 	CALL_BF(BF_GetBlock(file_desc, 0, first_block), "Error getting block in HT_OpenIndex\n");
 
+	// Check that the file is a hash table
+	HT_info *ht_info = (HT_info*)BF_Block_GetData(first_block);
+	if (ht_info->type != HashTable) {
+		printf("Error opening file %s\n (File is not a hash table)\n", fileName);
+
+		// Unpin and Destroy the block because we don't need it anymore
+		CALL_BF(BF_UnpinBlock(first_block), "Error unpinning block in HT_OpenIndex\n");
+		BF_Block_Destroy(&first_block);
+
+		return HT_ERROR;
+	}
+
 	// Destroy the block because we don't need it anymore
 	BF_Block_Destroy(&first_block);
 
