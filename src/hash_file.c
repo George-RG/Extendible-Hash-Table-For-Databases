@@ -32,6 +32,27 @@ HT_ErrorCode HT_Init() {
 	return HT_OK;
 }
 
+HT_ErrorCode HT_Close() {
+	//insert code here
+	// Close all files
+	for (int i = 0; i < MAX_OPEN_FILES; i++) {
+		if (file_table[i].file_desc != -1) {
+			if(HT_CloseFile(i) != HT_OK)
+			{
+				printf("Error closing file %s\n", file_table[i].filename);
+				return HT_ERROR;
+			}
+		}
+	}
+
+	// Free the table of contents
+	free(file_table);
+
+	BF_Close();
+
+	return HT_OK;
+}
+
 HT_ErrorCode HT_CreateIndex(const char *filename, int depth) {
 	//insert code here
 	printf("Creating File %s ...\n", filename);

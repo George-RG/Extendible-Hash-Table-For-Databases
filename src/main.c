@@ -19,15 +19,29 @@
 
 int main(void)
 {
-    CALL_OR_DIE(HT_Init());
+    if(HT_Init() != HT_OK)
+		goto exit_program;
 
 	int indexDesc;
-	CALL_OR_DIE(HT_CreateIndex(FILE_NAME, GLOBAL_DEPT));
-	CALL_OR_DIE(HT_OpenIndex(FILE_NAME, &indexDesc));
+
+	if(HT_CreateIndex(FILE_NAME, GLOBAL_DEPT) != HT_OK)
+		goto exit_program;
+
+	if(HT_OpenIndex(FILE_NAME, &indexDesc) != HT_OK)
+		goto exit_program;
 
     show_files();
 
-    CALL_OR_DIE(HT_CloseFile(indexDesc));
+	if(HT_CloseFile(indexDesc) != HT_OK)
+		goto exit_program;
+
+	if(HT_Close() != HT_OK)
+		goto exit_program;
 
     return 0;
+
+
+	exit_program:
+		HT_Close();
+		return -1;
 }
