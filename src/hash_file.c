@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <math.h>
 
 // #include "ht.h"
 #include "hash_file.h"
@@ -53,6 +54,160 @@ HT_ErrorCode HT_Close() {
 	return HT_OK;
 }
 
+int min(int a, int b)
+{
+	if(a < b)
+		return a;
+	else
+		return b;
+}
+
+HashTableCell* DoubleHashTable(int file_dsc, int old_depth, HashTableCell* hash_table_old)
+{
+	// Find the blocks that the table was stored in
+	BF_Block* metadata_block;
+	BF_Block_Init(&metadata_block);
+
+	CALL_BF(BF_GetBlock(file_dsc, 0, metadata_block), "Error getting block in UpdateHashTable\n");
+
+	HT_info* ht_info = (HT_info*)BF_Block_GetData(metadata_block);
+
+	size_t new_table_size = 1 << (old_depth+1);
+
+	// Create a new table in memory
+	HashTableCell* hash_table_new;
+	hash_table_new = malloc(sizeof(HashTableCell) * new_table_size);
+	
+	if (ht_info->first_hash_table_block_id == -1 || ht_info->number_of_hash_table_blocks == 0 || hash_table_old == NULL || old_depth == 0)
+	{
+		// Create the table from scratch΄
+		for(int i = 0; i < new_table_size; i++)
+			hash_table_new[i].block_id = -1;
+	}
+	else
+	{
+		// Create the new table from the old one
+		unsigned int old_table_size = 1 << old_depth;
+
+		for(int i = 0; i < old_table_size; i++)
+		{
+			hash_table_new[i].block_id = hash_table_old[i].block_id;
+			hash_table_new[i+1].block_id = hash_table_old[i].block_id;
+		}
+
+		// Free the old table
+		free(hash_table_old);
+	}
+
+	int* old_used_blocks = NULL;
+	int old_used_blocks_num = ht_info->number_of_hash_table_blocks;
+	if (ht_info->first_hash_table_block_id != -1) 
+	{
+		old_used_blocks = malloc(sizeof(int) * ht_info->number_of_hash_table_blocks);
+		old_used_blocks[0] = ht_info->first_hash_table_block_id;
+
+		// Find the blocks that the table was stored in
+		BF_Block* hash_table_block;
+		BF_Block_Init(&hash_table_block);
+		int next_block_id=  ht_info->first_hash_table_block_id;
+
+		for(int i = 1; i < ht_info->number_of_hash_table_blocks; i++)
+		{
+			if(next_block_id == -1)
+			{
+				printf("Error in DoubleHashTable(next_block_id == -1)\n");
+				return NULL;
+			}
+
+			CALL_BF(BF_GetBlock(file_dsc, next_block_id, hash_table_block), "Error getting first block in DoubleHashTable\n");
+			HashTable_Block_metadata* first_block_metadata = (HashTable_Block_metadata*)BF_Block_GetData(hash_table_block);
+			next_block_id = first_block_metadata->next_block_id;
+			old_used_blocks[i] = next_block_id;
+			// Unpin the block
+			CALL_BF(BF_UnpinBlock(hash_table_block), "Error unpinning block in DoubleHashTable\n");
+		}
+
+		// Destroy the block because we don't need it anymore
+		BF_Block_Destroy(&hash_table_block);
+	}	
+
+	size_t remaining_size = new_table_size;
+	int remaining_preallocated_blocks = old_used_blocks_num;
+	BF_Block* hash_table_block;
+	BF_Block_Init(&hash_table_block);
+	int cur_block_id = -1;
+
+	int* new_block_ids = malloc(sizeof(int) * ceil((double)new_table_size / ht_info->cells_per_hash_block));
+	int new_blocks_num = 0;	
+	while(remaining_size > 0)
+	{
+		if(remaining_preallocated_blocks > 0)
+		{
+			cur_block_id = old_used_blocks[old_used_blocks_num - remaining_preallocated_blocks];
+			CALL_BF(BF_GetBlock(file_dsc, cur_block_id, hash_table_block), "Error getting block in DoubleHashTable\n");	
+			remaining_preallocated_blocks--;
+		}
+		else
+		{
+			CALL_BF(BF_AllocateBlock(file_dsc, hash_table_block), "Error allocating block in DoubleHashTable\n");
+			CALL_BF(BF_GetBlockCounter(file_dsc, &cur_block_id),"Error getting block count in DoubleHashTable");
+			cur_block_id--;
+		}
+
+		if(ht_info->first_hash_table_block_id == -1)
+		{
+			if(cur_block_id == -1)
+			{
+				printf("Error in DoubleHashTable(cur_block_id == -1)\n");
+				return NULL;
+			}
+
+			ht_info->first_hash_table_block_id = cur_block_id;
+		}
+		
+		// Copy the table to the block
+		void* block_data = (void*)BF_Block_GetData(hash_table_block);
+		void* table_data = (void*)hash_table_new;
+		int offset_in_table = (new_blocks_num * ht_info->cells_per_hash_block) * sizeof(HashTableCell);
+		int offset_in_block = sizeof(HashTable_Block_metadata);
+
+		int amount_to_copy = min(remaining_size, ht_info->cells_per_hash_block);
+		memcpy(block_data + offset_in_block, table_data + offset_in_table, amount_to_copy * sizeof(HashTableCell));
+
+		// Set the metadata of the block
+		HashTable_Block_metadata* block_metadata = (HashTable_Block_metadata*)block_data;
+		block_metadata->next_block_id = -1;
+
+		BF_Block_SetDirty(hash_table_block);
+		CALL_BF(BF_UnpinBlock(hash_table_block), "Error unpinning block in DoubleHashTable\n");
+
+		new_block_ids[new_blocks_num] = cur_block_id;
+		new_blocks_num++;
+		remaining_size -= amount_to_copy;
+	}
+
+	// Update the metadata of the blocks
+
+	for(int i = 0; i < new_blocks_num - 1; i++)
+	{
+		CALL_BF(BF_GetBlock(file_dsc, new_block_ids[i], hash_table_block), "Error getting block in DoubleHashTable\n");
+		HashTable_Block_metadata* block_metadata = (HashTable_Block_metadata*)BF_Block_GetData(hash_table_block);
+		block_metadata->next_block_id = new_block_ids[i+1];
+		BF_Block_SetDirty(hash_table_block);
+		CALL_BF(BF_UnpinBlock(hash_table_block), "Error unpinning block in DoubleHashTable\n");
+	}
+
+	// Destroy the block because we don't need it anymore
+	BF_Block_Destroy(&hash_table_block);
+
+	// Free the unused tables
+	free(new_block_ids);
+	if(old_used_blocks != NULL)
+		free(old_used_blocks);
+
+	return hash_table_new;
+}	
+
 HT_ErrorCode HT_CreateIndex(const char *filename, int depth) {
 	//insert code here
 	printf("Creating File %s ...\n", filename);
@@ -85,14 +240,20 @@ HT_ErrorCode HT_CreateIndex(const char *filename, int depth) {
 	memset(ht_info, 0, BF_BLOCK_SIZE);
 
 	// Initialize the metadata of the file
-	ht_info->type = HashTable;
+	ht_info->type = HashFile;
 	ht_info->number_of_records_per_block = (BF_BLOCK_SIZE - sizeof(HT_block_info)) / sizeof(Record);
 	ht_info->global_depth = depth;
+	ht_info->first_hash_table_block_id = -1;
+	ht_info->number_of_hash_table_blocks = 0;
+	ht_info->cells_per_hash_block = (BF_BLOCK_SIZE - sizeof(HashTable_Block_metadata)) / sizeof(HashTableCell);
 
 	// Set the block as dirty because we changed it and unpin it
 	BF_Block_SetDirty(first_block);
 	CALL_BF(BF_UnpinBlock(first_block),"Error unpinning block in HT_CreateIndex\n");
 	BF_Block_Destroy(&first_block);
+
+	// Allocate blocks for the hash table
+	// UpdateHashTable(file_desc, depth);
 
 	// Close the file before exiting
 	CALL_BF(BF_CloseFile(file_desc), "Error closing file\n");
@@ -116,7 +277,7 @@ HT_ErrorCode HT_OpenIndex(const char *fileName, int *indexDesc){
 
 	// Check that the file is a hash table
 	HT_info *ht_info = (HT_info*)BF_Block_GetData(first_block);
-	if (ht_info->type != HashTable) {
+	if (ht_info->type != HashFile) {
 		printf("Error opening file %s\n (File is not a hash table)\n", fileName);
 
 		// Unpin and Destroy the block because we don't need it anymore
@@ -193,7 +354,8 @@ HT_ErrorCode HT_CloseFile(int indexDesc) {
 }
 
 HT_ErrorCode HT_InsertEntry(int indexDesc, Record record) {
-	//insert code here
+
+
 	return HT_OK;
 }
 

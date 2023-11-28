@@ -38,6 +38,8 @@ int main(void)
 	if(HT_Close() != HT_OK)
 		goto exit_program;
 
+	HT_Close();
+
     return 0;
 
 
