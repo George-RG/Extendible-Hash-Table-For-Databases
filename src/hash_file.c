@@ -83,6 +83,9 @@ HashTableCell* DoubleHashTable(int file_dsc, int old_depth, HashTableCell* hash_
 		// Create the table from scratch΄
 		for(int i = 0; i < new_table_size; i++)
 			hash_table_new[i].block_id = -1;
+
+		if(hash_table_old != NULL)
+			free(hash_table_old);
 	}
 	else
 	{
