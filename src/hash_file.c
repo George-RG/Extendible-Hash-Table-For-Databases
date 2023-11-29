@@ -112,7 +112,7 @@ HashTableCell* DoubleHashTable(int file_dsc, int old_depth, HashTableCell* hash_
 		// Find the blocks that the table was stored in
 		BF_Block* hash_table_block;
 		BF_Block_Init(&hash_table_block);
-		int next_block_id=  ht_info->first_hash_table_block_id;
+		int next_block_id=ht_info->first_hash_table_block_id;
 
 		for(int i = 1; i < ht_info->number_of_hash_table_blocks; i++)
 		{
@@ -152,9 +152,8 @@ HashTableCell* DoubleHashTable(int file_dsc, int old_depth, HashTableCell* hash_
 		}
 		else
 		{
-			CALL_BF(BF_AllocateBlock(file_dsc, hash_table_block), "Error allocating block in DoubleHashTable\n");
 			CALL_BF(BF_GetBlockCounter(file_dsc, &cur_block_id),"Error getting block count in DoubleHashTable");
-			cur_block_id--;
+			CALL_BF(BF_AllocateBlock(file_dsc, hash_table_block), "Error allocating block in DoubleHashTable\n");
 		}
 
 		if(ht_info->first_hash_table_block_id == -1)
