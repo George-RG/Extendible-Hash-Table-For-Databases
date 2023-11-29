@@ -154,15 +154,18 @@ HashTableCell* DoubleHashTable(int file_dsc, int old_depth, HashTableCell* hash_
 		{
 			CALL_BF(BF_GetBlockCounter(file_dsc, &cur_block_id),"Error getting block count in DoubleHashTable");
 			CALL_BF(BF_AllocateBlock(file_dsc, hash_table_block), "Error allocating block in DoubleHashTable\n");
+			void* block_data = (void*)BF_Block_GetData(hash_table_block);
+			memset(block_data, 0, BF_BLOCK_SIZE);
+		}
+
+		if(cur_block_id == -1)
+		{
+			printf("Error in DoubleHashTable(cur_block_id == -1)\n");
+			return NULL;
 		}
 
 		if(ht_info->first_hash_table_block_id == -1)
 		{
-			if(cur_block_id == -1)
-			{
-				printf("Error in DoubleHashTable(cur_block_id == -1)\n");
-				return NULL;
-			}
 
 			ht_info->first_hash_table_block_id = cur_block_id;
 		}
@@ -170,8 +173,9 @@ HashTableCell* DoubleHashTable(int file_dsc, int old_depth, HashTableCell* hash_
 		// Copy the table to the block
 		void* block_data = (void*)BF_Block_GetData(hash_table_block);
 		void* table_data = (void*)hash_table_new;
-		int offset_in_table = (new_blocks_num * ht_info->cells_per_hash_block) * sizeof(HashTableCell);
-		int offset_in_block = sizeof(HashTable_Block_metadata);
+
+		size_t offset_in_table = (new_blocks_num * ht_info->cells_per_hash_block) * sizeof(HashTableCell);
+		size_t offset_in_block = sizeof(HashTable_Block_metadata);
 
 		int amount_to_copy = min(remaining_size, ht_info->cells_per_hash_block);
 		memcpy(block_data + offset_in_block, table_data + offset_in_table, amount_to_copy * sizeof(HashTableCell));
