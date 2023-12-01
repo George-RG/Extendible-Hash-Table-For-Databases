@@ -1,0 +1,450 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <math.h>
+
+#include "utility.h"
+
+
+/*
+Doubles The old hast table in size and returns the new one
+This update is done in both the memory and the disk
+In any error case NULL is returned
+
+note: This function updates the following fields in the metadata block:
+	- first_hash_table_block_id
+	- number_of_hash_table_blocks
+	- global_depth
+*/
+HashTableCell* DoubleHashTable(int file_dsc, int old_depth, HashTableCell* hash_table_old)
+{
+	// Find the blocks that the table was stored in
+	BF_Block* metadata_block;
+	BF_Block_Init(&metadata_block);
+
+	CALL_BF_PTR(BF_GetBlock(file_dsc, 0, metadata_block), "Error getting block in UpdateHashTable\n");
+
+	HT_info* ht_info = (HT_info*)BF_Block_GetData(metadata_block);
+
+	size_t new_table_size = 1 << (old_depth + 1);
+
+	// Create a new table in memory
+	HashTableCell* hash_table_new;
+	hash_table_new = malloc(sizeof(HashTableCell) * new_table_size);
+	
+	if (ht_info->first_hash_table_block_id == -1 || ht_info->number_of_hash_table_blocks == 0 || hash_table_old == NULL || old_depth == 0)
+	{
+		// Create the table from scratch΄
+		for(int i = 0; i < new_table_size; i++)
+			hash_table_new[i].block_id = -1;
+
+		if(hash_table_old != NULL)
+			free(hash_table_old);
+	}
+	else
+	{
+		// Create the new table from the old one
+		unsigned int old_table_size = 1 << old_depth;
+
+		for(int i = 0; i < old_table_size; i++)
+		{
+			hash_table_new[i].block_id = hash_table_old[i].block_id;
+			hash_table_new[i+1].block_id = hash_table_old[i].block_id;
+		}
+
+		// Free the old table
+		free(hash_table_old);
+	}
+
+	int* old_used_blocks = NULL;
+	int old_used_blocks_num = ht_info->number_of_hash_table_blocks;
+	if (ht_info->first_hash_table_block_id != -1) 
+	{
+		old_used_blocks = malloc(sizeof(int) * ht_info->number_of_hash_table_blocks);
+		old_used_blocks[0] = ht_info->first_hash_table_block_id;
+
+		// Find the blocks that the table was stored in
+		BF_Block* hash_table_block;
+		BF_Block_Init(&hash_table_block);
+		int next_block_id=ht_info->first_hash_table_block_id;
+
+		for(int i = 1; i < ht_info->number_of_hash_table_blocks; i++)
+		{
+			if(next_block_id == -1)
+			{
+				printf("Error in DoubleHashTable(next_block_id == -1)\n");
+				return NULL;
+			}
+
+			CALL_BF_PTR(BF_GetBlock(file_dsc, next_block_id, hash_table_block), "Error getting first block in DoubleHashTable\n");
+			HashTable_Block_metadata* first_block_metadata = (HashTable_Block_metadata*)BF_Block_GetData(hash_table_block);
+			next_block_id = first_block_metadata->next_block_id;
+			old_used_blocks[i] = next_block_id;
+			// Unpin the block
+			CALL_BF_PTR(BF_UnpinBlock(hash_table_block), "Error unpinning block in DoubleHashTable\n");
+		}
+
+		// Destroy the block because we don't need it anymore
+		BF_Block_Destroy(&hash_table_block);
+	}	
+
+	size_t remaining_size = new_table_size;
+	int remaining_preallocated_blocks = old_used_blocks_num;
+	BF_Block* hash_table_block;
+	BF_Block_Init(&hash_table_block);
+	int cur_block_id = -1;
+
+	int* new_block_ids = malloc(sizeof(int) * ceil((double)new_table_size / ht_info->cells_per_hash_block));
+	int new_blocks_num = 0;	
+	while(remaining_size > 0)
+	{
+		if(remaining_preallocated_blocks > 0)
+		{
+			cur_block_id = old_used_blocks[old_used_blocks_num - remaining_preallocated_blocks];
+			CALL_BF_PTR(BF_GetBlock(file_dsc, cur_block_id, hash_table_block), "Error getting block in DoubleHashTable\n");	
+			remaining_preallocated_blocks--;
+		}
+		else
+		{
+			CALL_BF_PTR(BF_GetBlockCounter(file_dsc, &cur_block_id),"Error getting block count in DoubleHashTable");
+			CALL_BF_PTR(BF_AllocateBlock(file_dsc, hash_table_block), "Error allocating block in DoubleHashTable\n");
+			void* block_data = (void*)BF_Block_GetData(hash_table_block);
+			memset(block_data, 0, BF_BLOCK_SIZE);
+		}
+
+		if(cur_block_id == -1)
+		{
+			printf("Error in DoubleHashTable(cur_block_id == -1)\n");
+			return NULL;
+		}
+
+		if(ht_info->first_hash_table_block_id == -1)
+		{
+
+			ht_info->first_hash_table_block_id = cur_block_id;
+		}
+		
+		// Copy the table to the block
+		void* block_data = (void*)BF_Block_GetData(hash_table_block);
+		void* table_data = (void*)hash_table_new;
+
+		size_t offset_in_table = (new_blocks_num * ht_info->cells_per_hash_block) * sizeof(HashTableCell);
+		size_t offset_in_block = sizeof(HashTable_Block_metadata);
+
+		int amount_to_copy = min(remaining_size, ht_info->cells_per_hash_block);
+		memcpy(block_data + offset_in_block, table_data + offset_in_table, amount_to_copy * sizeof(HashTableCell));
+
+		// Set the metadata of the block
+		HashTable_Block_metadata* block_metadata = (HashTable_Block_metadata*)block_data;
+		block_metadata->next_block_id = -1;
+
+		BF_Block_SetDirty(hash_table_block);
+		CALL_BF_PTR(BF_UnpinBlock(hash_table_block), "Error unpinning block in DoubleHashTable\n");
+
+		new_block_ids[new_blocks_num] = cur_block_id;
+		new_blocks_num++;
+		remaining_size -= amount_to_copy;
+	}
+
+	// Update the metadata of the blocks
+
+	for(int i = 0; i < new_blocks_num - 1; i++)
+	{
+		CALL_BF_PTR(BF_GetBlock(file_dsc, new_block_ids[i], hash_table_block), "Error getting block in DoubleHashTable\n");
+		HashTable_Block_metadata* block_metadata = (HashTable_Block_metadata*)BF_Block_GetData(hash_table_block);
+		block_metadata->next_block_id = new_block_ids[i+1];
+		BF_Block_SetDirty(hash_table_block);
+		CALL_BF_PTR(BF_UnpinBlock(hash_table_block), "Error unpinning block in DoubleHashTable\n");
+	}
+
+	// Update the metadata of the file
+	ht_info->number_of_hash_table_blocks = new_blocks_num;
+	ht_info->global_depth = old_depth+1;
+
+	// Destroy the block because we don't need it anymore
+	BF_Block_Destroy(&hash_table_block);
+
+	// Destroy the metadata block after updating it
+	BF_Block_SetDirty(metadata_block);
+	// TODO check if this is needed
+	CALL_BF_PTR(BF_UnpinBlock(metadata_block), "Error unpinning block in DoubleHashTable\n");
+	BF_Block_Destroy(&metadata_block);
+
+	// Free the unused tables
+	free(new_block_ids);
+	if(old_used_blocks != NULL)
+		free(old_used_blocks);
+
+	return hash_table_new;
+}	
+
+/*
+Creates a hash table with depth depth
+This table is created both in memory and in the disk
+In any error case NULL is returned
+
+Note: The table will have size 2^depth
+
+Note: This function updates the following fields in the metadata block:
+	- first_hash_table_block_id
+	- number_of_hash_table_blocks
+	- global_depth
+*/
+HashTableCell* CreateHashTable(int file_dsc, int depth)
+{
+	return DoubleHashTable(file_dsc, depth-1, NULL);
+}
+
+/*
+Loads the hash table from the disk and returns it in memory
+In any error case NULL is returned
+
+Note: The global depth in the metadata of the file MUST be correct
+*/
+HashTableCell* LoadTableFromDisk(int file_dsc)
+{
+	// Find the blocks that the table was stored in
+	BF_Block* metadata_block;
+	BF_Block_Init(&metadata_block);
+
+	CALL_BF_PTR(BF_GetBlock(file_dsc, 0, metadata_block), "Error getting block in UpdateHashTable\n");
+
+	HT_info* ht_info = (HT_info*)BF_Block_GetData(metadata_block);
+
+	if (ht_info->first_hash_table_block_id == -1 || ht_info->number_of_hash_table_blocks == 0)
+	{
+		printf("Error in LoadTableFromDisk\n");
+		return NULL;
+	}
+
+	// Create the table in memory
+	HashTableCell* hash_table;
+	hash_table = malloc(sizeof(HashTableCell) * (1 << ht_info->global_depth));
+
+	// Load the blocks of the table
+	BF_Block* hash_table_block;
+	BF_Block_Init(&hash_table_block);
+
+	int next_block_id = ht_info->first_hash_table_block_id;
+
+	int cells_to_read = (1 << ht_info->global_depth);
+
+	for(int i = 0; i < ht_info->number_of_hash_table_blocks; i++)
+	{
+		if(next_block_id == -1)
+		{
+			printf("Error in LoadTableFromDisk(next_block_id == -1)\n");
+			return NULL;
+		}
+
+		CALL_BF_PTR(BF_GetBlock(file_dsc, next_block_id, hash_table_block), "Error getting first block in LoadTableFromDisk\n");
+		void* block_data = (void*)BF_Block_GetData(hash_table_block);
+
+		// Read the next block id
+		HashTable_Block_metadata* block_metadata = (HashTable_Block_metadata*)block_data;
+		next_block_id = block_metadata->next_block_id;
+
+		// move the block_data pointer after the metadata
+		block_data += sizeof(HashTable_Block_metadata);
+
+		// Copy the table to the block
+		void* table_data = (void*)hash_table;
+		size_t offset_in_table = i * ht_info->cells_per_hash_block * sizeof(HashTableCell);
+
+		int amount_of_cells_to_copy = min(cells_to_read, ht_info->cells_per_hash_block);
+
+		memcpy(table_data + offset_in_table, block_data, amount_of_cells_to_copy * sizeof(HashTableCell));
+
+		cells_to_read -= amount_of_cells_to_copy;
+		CALL_BF_PTR(BF_UnpinBlock(hash_table_block), "Error unpinning block in LoadTableFromDisk\n");	
+	}
+
+	// Destroy the block because we don't need it anymore
+	BF_Block_Destroy(&hash_table_block);
+
+	// Destroy the metadata block because we don't need it anymore
+	// TODO check if this is needed
+	CALL_BF_PTR(BF_UnpinBlock(metadata_block), "Error unpinning block in LoadTableFromDisk\n");
+	BF_Block_Destroy(&metadata_block);
+
+	return hash_table;
+}
+
+/*
+Frees the memory used by the hash table
+*/
+int FreeHashTable(HashTableCell* hash_table)
+{
+	free(hash_table);
+	return 0;
+}
+
+// 
+
+HashTableCell* SplitBlock(int block_id, int file_dsc, HashTableCell* hash_table, uint hash_value)
+{
+	// Get the first block with the metadata
+	BF_Block* metadata_block;
+	BF_Block_Init(&metadata_block);
+	BF_Block_GetBlock(file_dsc, 0, metadata_block);
+	HT_info* ht_info = (HT_info*)BF_Block_GetData(metadata_block);
+	int global_depth = ht_info->global_depth;
+	
+	// Get the block to split
+	BF_Block* record_block;
+	BF_Block_Init(&record_block);
+	BF_Block_GetBlock(file_dsc, block_id, record_block);
+	HT_block_info* old_block_info = (HT_block_info*) BF_Block_GetData(record_block);
+	int local_depth = old_block_info->local_depth;
+
+	// 2 cases here
+	
+	// 1. The block needs to be splited in 2 but in the same hash table
+	// 2. The new block does not fit in the hash table so we need to double the hash table
+	int new_hash_value = hash_value;
+	if(local_depth == global_depth)		// Case 2
+	{
+		// Double the hash table
+		hash_table = DoubleHashTable(file_dsc, global_depth, hash_table);
+		if(hash_table == NULL)
+		{
+			printf("Error in SplitBlock\n");
+			return NULL;
+		}
+		global_depth++;
+		new_hash_value = hash_value << 1;
+	}
+
+	// Prefix of all friends of the block that will be split
+	int prefix = new_hash_value >> (global_depth - local_depth);
+
+	// Index of first friend of the block that will be split
+	int first_friend_index = prefix << (global_depth - local_depth);
+
+	// Index of the last friend of the block that will be split
+	int last_friend_index = first_friend_index | ((1 << (global_depth - local_depth)) - 1);
+
+	// Split the block in 2, so create a new one
+	int new_block_id;
+	BF_Block* new_block;
+	BF_Block_Init(&new_block);
+	BF_CALL_PTR(BF_GetBlockCounter(file_dsc, &new_block_id), "Error getting block count in SplitBlock\n");
+	BF_CALL_PTR(BF_AllocateBlock(file_dsc, new_block), "Error allocating block in SplitBlock\n");
+
+	// Update the metadata of the new block
+	HT_block_info* new_block_info = (HT_block_info*)BF_Block_GetData(new_block);
+	new_block_info->local_depth = local_depth + 1;
+	old_block_info->local_depth = local_depth + 1;
+	new_block_info->number_of_records_on_block = 0;
+
+	// Update the pointers in the hash table
+	for(int i = ((last_friend_index - first_friend_index)/2) + 1; i <= last_friend_index - first_friend_index ; i++)
+	{
+		UpdateHashTableValue(hash_table, first_friend_index + i, new_block_id, file_dsc);
+	}
+
+	// Clean up
+	BF_Block_SetDirty(record_block);
+	BF_Block_SetDirty(new_block);
+
+	BF_CALL_PTR(BF_UnpinBlock(record_block), "Error unpinning block in SplitBlock\n");
+	BF_Block_Destroy(&record_block);
+
+	BF_CALL_PTR(BF_UnpinBlock(new_block), "Error unpinning block in SplitBlock\n");
+	BF_Block_Destroy(&new_block);
+
+	BF_Block_SetDirty(metadata_block);
+	BF_CALL_PTR(BF_UnpinBlock(metadata_block), "Error unpinning block in SplitBlock\n");
+	BF_Block_Destroy(&metadata_block);
+
+	return hash_table;	
+}
+
+int min(int a, int b)
+{
+	if(a < b)
+		return a;
+	else
+		return b;
+}
+
+BF_ErrorCode UpdateHashTableValue(HashTableCell* hashtable, int index, int value, int file_dsc)
+{
+	hashtable[index].block_id = value;
+
+	// Update the disk
+	BF_Block* metadata_block;
+	BF_Block_Init(&metadata_block);
+	BF_GetBlock(file_dsc, 0, metadata_block);
+	HT_info* ht_info = (HT_info*)BF_Block_GetData(metadata_block);
+
+	// Find the index of the block in the chain of blocks
+	int block_index = index / ht_info->cells_per_hash_block;
+
+	// Follow the chain of blocks until we find the block we want
+	int next_block_id = ht_info->first_hash_table_block_id;
+	void* block_data = NULL;
+	
+	BF_Block* hash_table_block;
+	BF_Block_Init(&hash_table_block);
+	for(int cur_block_index=0; cur_block_index < ht_info->number_of_hash_table_blocks; cur_block_index++)
+	{
+		BF_GetBlock(file_dsc, next_block_id, hash_table_block);
+		HashTable_Block_metadata* block_metadata = (HashTable_Block_metadata*)BF_Block_GetData(hash_table_block);
+		block_data = ((void*)block_metadata) + sizeof(HashTable_Block_metadata);
+
+		if(cur_block_index == block_index)
+		{
+			// We found the block 
+			break;
+		}
+
+		next_block_id = block_metadata->next_block_id;
+		// unpin the block
+		BF_UnpinBlock(hash_table_block);
+	}
+
+	if(block_data == NULL)
+	{
+		printf("Error in UpdateHashTableValue\n");
+		return BF_ERROR;
+	}
+
+	// Update the block
+	HashTableCell* block_table = (HashTableCell*)block_data;
+	index = index % ht_info->cells_per_hash_block;
+
+	block_table[index].block_id = value;
+
+	// Set the block as dirty
+	BF_Block_SetDirty(hash_table_block);
+	BF_CALL(BF_UnpinBlock(hash_table_block), "Error unpinning block in UpdateHashTableValue\n");
+	BF_Block_Destroy(&hash_table_block);
+
+	// Unpin the metadata block
+	// TODO possibly remove this
+	BF_CALL(BF_UnpinBlock(metadata_block), "Error unpinning block in UpdateHashTableValue\n");
+	BF_Block_Destroy(&metadata_block);
+
+	return BF_OK;
+}
+
+uint hash_function(unsigned int x, unsigned int size)
+{
+
+	// Check if size is a power of 2
+	if (size & (size - 1) != 0)
+	{
+		fprintf(stderr, "Error in hash_function. Size is not a poower of 2\n");
+		return -1;
+	}
+
+	// Find the number of bits needed to represent size
+	int leading_zeros = __builtin_clz(size - 1);
+	int number_of_bits = 32 - leading_zeros;
+
+	// Keep the number of bits needed to represent size
+	int new_x = x & ((1 << number_of_bits) - 1);
+	return new_x;
+}

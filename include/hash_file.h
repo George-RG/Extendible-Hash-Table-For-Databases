@@ -14,6 +14,8 @@ typedef enum HT_ErrorCode {
 
 // Helpers
 void show_files(void);
+int count_zeros(int);
+unsigned int hash_function(unsigned int, unsigned int);
 
 /*
  * Η συνάρτηση HT_Init χρησιμοποιείται για την αρχικοποίηση κάποιον δομών που μπορεί να χρειαστείτε. 
