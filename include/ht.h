@@ -34,9 +34,6 @@ typedef struct {
     HashTableCell* hash_table;
 } content_table_entry;
 
-// The table that contains the file descriptors and the filenames
-content_table_entry* file_table;
-
 typedef struct {
     int next_block_id;
 } HashTable_Block_metadata;

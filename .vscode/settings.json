@@ -3,6 +3,7 @@
         "*.embeddedhtml": "html",
         "system_error": "c",
         "ht.h": "c",
-        "hash_file.h": "c"
+        "hash_file.h": "c",
+        "utility.h": "c",
     }
 }

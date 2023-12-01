@@ -6,7 +6,7 @@ EXEC := ./bin/project
 
 # paths
 LIB := ./lib
-INCLUDE := ./include
+INCLUDE := include
 SRC := ./src
 BUILD := ./build
 
@@ -105,7 +105,7 @@ remove_db:
 valgrind:
 	$(MAKE) clean
 	$(MAKE) $(EXEC) DEBUG=true
-	valgrind --error-exitcode=1 --leak-check=full --show-leak-kinds=all  ./$(EXEC) $(ARGS)
+	valgrind --error-exitcode=1 --leak-check=full --show-leak-kinds=all --track-origins=yes -s ./$(EXEC) $(ARGS)
 
 debug:
 	$(MAKE) clean

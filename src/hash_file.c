@@ -4,10 +4,14 @@
 #include <unistd.h>
 #include <math.h>
 
-// #include "ht.h"
 #include "hash_file.h"
-#include "ht.h"
-#include "utility.h"
+
+#define MAX_SPLITS 10 // Maximum number of splits before giving up
+
+// The table that contains the file descriptors and the filenames
+content_table_entry* file_table;
+
+void show_hash_table(HashTableCell *hash_table, int size, int file_dsc);
 
 HT_ErrorCode HT_Init()
 {
@@ -111,7 +115,6 @@ HT_ErrorCode HT_CreateIndex(const char *filename, int depth)
 HT_ErrorCode HT_OpenIndex(const char *fileName, int *indexDesc)
 {
 
-	// insert code here
 	printf("Opening file %s ...\n", fileName);
 
 	// Get file descrtiptor for fileName
@@ -191,6 +194,10 @@ HT_ErrorCode HT_CloseFile(int indexDesc)
 	BF_Block_Init(&first_block);
 	BF_GetBlock(file_desc, 0, first_block);
 
+	// Get the data of the block and cast it to HT_info
+	HT_info *ht_info = (HT_info *)BF_Block_GetData(first_block);
+	int depth = ht_info->global_depth;
+
 	// Set the block as dirty because we changed it and unpin it
 	BF_Block_SetDirty(first_block);
 	CALL_BF(BF_UnpinBlock(first_block), "Error unpinning block in HT_CloseFile\n");
@@ -205,6 +212,9 @@ HT_ErrorCode HT_CloseFile(int indexDesc)
 	file_table[indexDesc].file_desc = -1;
 	free(file_table[indexDesc].filename);
 	file_table[indexDesc].filename = NULL;
+
+	printf("File with index %d had hash table:\n", indexDesc);
+	show_hash_table(file_table[indexDesc].hash_table, 1 << depth, file_desc);
 
 	FreeHashTable(file_table[indexDesc].hash_table);
 	file_table[indexDesc].hash_table = NULL;
@@ -230,6 +240,9 @@ HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 
 	int hash_table_size = 1 << ht_info->global_depth;
 	uint hash_value = hash_function(record.id, hash_table_size);
+
+	printf("Inserting record with id %d and hash value %d\n", record.id, hash_value);
+
 	HashTableCell *hash_table;
 
 	if (file_table[indexDesc].hash_table == NULL)
@@ -242,117 +255,225 @@ HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 		hash_table = file_table[indexDesc].hash_table;
 	}
 
+	int record_block_id = hash_table[hash_value].block_id;
+
+	// Block that will be used to insert the record
 	BF_Block *record_block;
 	BF_Block_Init(&record_block);
-
-	int record_block_id = hash_table[hash_value].block_id;
+	void* block_data = NULL;
 
 	// Here we have 3 cases
 
 	// 1. The block_id is -1, which means that there is no block for this hash value
 	// In this case we allocate a block and insert the record there
 
-	// 2. The block_id is not -1 and the block is full
+	// 2. The block_id is not -1 and the block is not full
+	// In this case we just insert the record to the block
+
+	// 3. The block_id is not -1 and the block is full
 	// In this case we need to split a block and insert the record there
 	// If the table has to be doubled, we need to update the metadata of the file
 
-	// 3. The block_id is not -1 and the block is not full
-	// In this case we just insert the record to the block
-
-	size_t block_data_offset = 0;
-	void* block_data = NULL;
-
-	if (record_block_id == -1)
+	// First case
+	if (record_block_id == -1)	
 	{
-		// Allocate a block for the record
+		// Allocate a block for the record to be inserted
+		CALL_BF(BF_GetBlockCounter(file_desc, &record_block_id), "Error getting block counter in DoubleHashTable\n");
 		CALL_BF(BF_AllocateBlock(file_desc, record_block), "Error allocating block in DoubleHashTable\n");
-		block_data = (void *)BF_Block_GetData(record_block);
-		memset(block_data, 0, BF_BLOCK_SIZE);
+		void* new_block_data = (void *)BF_Block_GetData(record_block);
+		memset(new_block_data, 0, BF_BLOCK_SIZE);
 
-		// Initialize the block metadata
-		HT_block_info *block_info = (HT_block_info *)block_data;
-		block_info->local_depth = 1;
-		block_info->number_of_records_on_block = 0;
-		block_data_offset = sizeof(HT_block_info);
-	}
-	else
-	{
-		CALL_BF(BF_GetBlock(file_desc, record_block_id, record_block), "Error getting block in DoubleHashTable\n");
-		block_data = (void *)BF_Block_GetData(record_block);
+		// Initialize the new block metadata
+		HT_block_info *new_block_info = (HT_block_info *)new_block_data;
+		new_block_info->local_depth = 1;
+		new_block_info->number_of_records_on_block = 0;
+		
+		// Prefix of all friends of the block that will be split
+		int prefix = hash_value >> (ht_info->global_depth - new_block_info->local_depth);
 
-		// Check if the block is full
-		HT_block_info *block_info = (HT_block_info *)block_data;
-		if(block_info->number_of_records_on_block == ht_info->number_of_records_per_block)
+		// Index of first friend of the block that will be split
+		int first_friend_index = prefix << (ht_info->global_depth - new_block_info->local_depth);
+
+		// Index of the last friend of the block that will be split
+		int last_friend_index = first_friend_index | ((1 << (ht_info->global_depth - new_block_info->local_depth)) - 1);
+		
+		// Update the friends to the disk as well
+		for(int index = first_friend_index; index <= last_friend_index; index++)
 		{
-			hash_table = SplitBlock(record_block_id, file_desc, hash_table, hash_function(record.id, hash_table_size));
-
-			hash_table_size = 1 << ht_info->global_depth; // Possible bug
-			
-
-			// Rehash the records of the block
-			BF_Block *new_record_block;
-			BF_Block_Init(&new_record_block);
-			block_info->number_of_records_on_block = 0;
-			for(int i = 0; i < ht_info->number_of_records_per_block; i++){
-				Record* record_location = (Record*)(block_data + sizeof(HT_block_info) + i * sizeof(Record));
-				Record temp_record;
-
-				// Keep the record in a temp variable
-				memcpy(&temp_record, record_location, sizeof(Record));
-
-				// Delete the record from the block 
-				memset(record_location, 0, sizeof(Record));
-				uint new_hash_value = hash_function(temp_record.id, hash_table_size);
-
-				// Use the hash value to find the block id
-				int new_record_block_id = hash_table[new_hash_value].block_id;
-				CALL_BF(BF_GetBlock(file_desc, new_record_block_id, new_record_block), "Error getting block in DoubleHashTable\n");
-				void* new_block_data = (void*)BF_Block_GetData(new_record_block);
-
-				// Get the metadata of the block
-				HT_block_info *new_block_info = (HT_block_info *)new_block_data;
-
-				// Find the offset in the block where the record should be inserted
-				size_t new_block_data_offset = sizeof(HT_block_info) + new_block_info->number_of_records_on_block * sizeof(Record);
-
-				// Copy the record to the rigth block after split
-				memcpy(new_block_data + new_block_data_offset, &temp_record, sizeof(Record));
-				new_block_info->number_of_records_on_block++;
-
-				// Set the block as dirty because we changed it and unpin it
-				BF_Block_SetDirty(new_record_block);
-				CALL_BF(BF_UnpinBlock(new_record_block), "Error unpinning block in DoubleHashTable\n");
-			}
-			BF_Block_Destroy(&new_record_block);
-			 
+			CALL_BF(UpdateHashTableValue(hash_table, index, record_block_id, file_desc), "Error updating hash table in DoubleHashTable\n");
 		}
 
-		// TODO
+		InsertRecordInBlock(new_block_data, record, ht_info->number_of_records_per_block);
+
+		goto HT_InsertEntry_inserted;
+	}
+
+	// Second case
+	// Now that we know that the block exists we can get it
+	CALL_BF(BF_GetBlock(file_desc, record_block_id, record_block), "Error getting block in DoubleHashTable\n");
+	block_data = (void*)BF_Block_GetData(record_block);
+	HT_block_info *block_info = (HT_block_info *)block_data;
+	
+	// If the block is full we return 1 and go to the next case
+	int status = InsertRecordInBlock(block_data, record, ht_info->number_of_records_per_block);
+	if(status == 0)
+	{
+		goto HT_InsertEntry_inserted;
+	}
+
+	// Third case
+	// Here we know that the block exists and it is full so we need to split the block and posibly to double the hash table in size
+	// So we repeatidly split - rehash - split - rehash until we can insert the record in the block
+
+	int new_record_block_id;
+	BF_Block *new_record_block;
+	BF_Block_Init(&new_record_block);
+
+	int split_counter = 0;
+	while (block_info->number_of_records_on_block == ht_info->number_of_records_per_block && split_counter < MAX_SPLITS)
+	{
+		split_counter++;
+
+		hash_table = SplitBlock(record_block_id, file_desc, hash_table, hash_value, &new_record_block_id);
+		file_table[indexDesc].hash_table = hash_table;
+		hash_table_size = 1 << ht_info->global_depth; // Update to the new size of the hash table
+
+		// Open the new block
+		CALL_BF(BF_GetBlock(file_desc, new_record_block_id, new_record_block), "Error getting block in DoubleHashTable\n");
+		void* new_block_data = (void *)BF_Block_GetData(new_record_block);
+
+		// Rehash all the records that were in the block
+		int reuturn_value = RehashRecords(block_data, new_block_data, record_block_id, new_record_block_id, hash_table, hash_table_size);
+		if(reuturn_value != 0)
+		{
+			printf("Error rehashing records in DoubleHashTable\n");
+			return HT_ERROR;
+		}
+
+		// Mark both blocks as dirty and unpin them
+		BF_Block_SetDirty(record_block);
+		CALL_BF(BF_UnpinBlock(record_block), "Error unpinning block in DoubleHashTable\n");
+
+		BF_Block_SetDirty(new_record_block);
+		CALL_BF(BF_UnpinBlock(new_record_block), "Error unpinning block in DoubleHashTable\n");
+
 		// Rehash the new record
 		hash_value = hash_function(record.id, hash_table_size);
 		record_block_id = hash_table[hash_value].block_id;
 
-		// TODO
+		// Load the new block and test again
 		CALL_BF(BF_GetBlock(file_desc, record_block_id, record_block), "Error getting block in DoubleHashTable\n");
-		block_data = (void *)BF_Block_GetData(record_block);
+		block_data = (void*)BF_Block_GetData(record_block);
+		block_info = (HT_block_info *)block_data;
+	}
+	BF_Block_Destroy(&new_record_block); 
 
-		block_data_offset = sizeof(HT_block_info) + block_info->number_of_records_on_block * sizeof(Record);
+	// If we have reached the maximum number of splits return error
+	if (split_counter == MAX_SPLITS)
+	{
+		printf("Error inserting entry in file with index %d (Maximum number of splits reached)\n", indexDesc);
+		return HT_ERROR;
 	}
 
 	// Insert the record to the right place in the block
-	Record *records_in_block = (Record *)(block_data + block_data_offset);
-	memcpy(records_in_block, &record, sizeof(Record));
+	status = InsertRecordInBlock(block_data, record, ht_info->number_of_records_per_block);\
+	if(status != 0)
+	{
+		printf("Error inserting entry in file with index %d (Record not inserted)\n", indexDesc);
+		return HT_ERROR;
+	}
 
-	// Update the metadata of the block
-	HT_block_info *block_info = (HT_block_info *)block_data;
-	block_info->number_of_records_on_block++;
+HT_InsertEntry_inserted:
 
+	// Show the hash table before inserting the record
+	if(file_table[indexDesc].hash_table != NULL)
+		show_hash_table(file_table[indexDesc].hash_table, hash_table_size, file_desc);
+
+	// Set the block as dirty because we changed it and unpin it
+	BF_Block_SetDirty(record_block);
+	CALL_BF(BF_UnpinBlock(record_block), "Error unpinning block in HT_InsertEntry\n");
+	BF_Block_Destroy(&record_block);
+
+	// Destroy the first block too without unpinning it
+	BF_Block_Destroy(&file_metadata_block);
+	
 	return HT_OK;
 }
 
 HT_ErrorCode HT_PrintAllEntries(int indexDesc, int *id)
 {
 	// insert code here
+	int file_desc = file_table[indexDesc].file_desc;
+
+	if (file_desc == -1)
+	{
+		printf("Error inserting entry in file with index %d\n (File not open)\n", indexDesc);
+		return HT_ERROR;
+	}
+
+	// Get the metadata block of the file
+	BF_Block *file_metadata_block;
+	BF_Block_Init(&file_metadata_block);
+	BF_GetBlock(file_desc, 0, file_metadata_block);
+
+	HT_info *ht_info = (HT_info *)BF_Block_GetData(file_metadata_block);
+
+	HashTableCell* hash_table;
+	hash_table = file_table[indexDesc].hash_table;
+
+	BF_Block *record_block;
+	BF_Block_Init(&record_block);
+
+	int hash_table_size = 1 << ht_info->global_depth;
+	// If id is not NULL, print only the record with the given id
+	if(id != NULL)
+	{
+		uint hash_value = hash_function(*id, hash_table_size);
+
+		int record_block_id = hash_table[hash_value].block_id;
+
+		BF_GetBlock(file_desc, record_block_id, record_block);
+		void* block_data = (void*)BF_Block_GetData(record_block);
+
+
+		for(int i = 0; i < ht_info->number_of_records_per_block; i++)
+		{
+			Record*  record_location = (Record*)(block_data + sizeof(HT_block_info) + i * sizeof(Record));
+			// print the record
+			if(record_location->id == *id)
+			{
+				printf("Record %d found: %d %s %s %s\n", i, record_location->id, record_location->name, record_location->surname, record_location->city);
+			}
+		}
+		
+	}
+	else
+	{
+		// Print all records
+		for (int i = 0; i < hash_table_size; i++)
+		{
+			int record_block_id = hash_table[i].block_id;
+
+			BF_GetBlock(file_desc, record_block_id, record_block);
+			void *block_data = (void *)BF_Block_GetData(record_block);
+
+			for (int j = 0; j < ht_info->number_of_records_per_block; j++)
+			{
+				Record *record_location = (Record *)(block_data + sizeof(HT_block_info) + j * sizeof(Record));
+				// print the record
+				printf("Record %d: %d %s %s %s\n", j, record_location->id, record_location->name, record_location->surname, record_location->city);
+			}
+			// Set the block as dirty because we changed it and unpin it
+			BF_Block_SetDirty(record_block);
+			CALL_BF(BF_UnpinBlock(record_block), "Error unpinning block in DoubleHashTable\n");	
+		}
+	}
+
+	BF_Block_Destroy(&record_block);
+
+	// Destroy the first block too without unpinning it
+	BF_Block_Destroy(&file_metadata_block);
+
 	return HT_OK;
 }
 
@@ -361,10 +482,37 @@ HT_ErrorCode HT_PrintAllEntries(int indexDesc, int *id)
 // Show all files in content table
 void show_files(void)
 {
-	printf("Showing files...\n");
+	printf(":: DEBUG :: Showing files...\n");
 	for (int i = 0; i < MAX_OPEN_FILES; i++)
 	{
 		if (file_table[i].file_desc != -1 && file_table[i].filename != NULL)
-			printf("File %d: %s with file desc %d\n", i, file_table[i].filename, file_table[i].file_desc);
+			printf(":: DEBUG :: File %d: %s with file desc %d\n", i, file_table[i].filename, file_table[i].file_desc);
+	}
+}
+
+// Show hash table
+void show_hash_table(HashTableCell *hash_table, int size, int file_dsc)
+{
+	// Create a block to get the data from the hash table
+	BF_Block *block;
+	BF_Block_Init(&block);
+
+
+	printf(":: DEBUG :: Showing hash table...\n");
+	for (int i = 0; i < size; i++)
+	{
+		int block_id = hash_table[i].block_id;
+
+		if(block_id == -1)
+		{
+			printf(":: DEBUG :: Hash table cell %d: block_id %d\n", i, block_id);
+			continue;
+		}
+
+		BF_GetBlock(file_dsc, block_id, block);
+		void *block_data = (void *)BF_Block_GetData(block);
+		HT_block_info *block_info = (HT_block_info *)block_data;
+
+		printf(":: DEBUG :: Hash table cell %d: block_id %d with local depth %d and %d entries\n", i, block_id, block_info->local_depth, block_info->number_of_records_on_block);
 	}
 }

@@ -5,6 +5,8 @@
 
 #include "record.h"
 #include "bf.h"
+#include "ht.h"
+#include "utility.h"
 
 
 typedef enum HT_ErrorCode {

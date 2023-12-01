@@ -1,9 +1,9 @@
 #ifndef UTILITY_H
 #define UTILITY_H
 
-#include "hash_file.h"
 #include "ht.h"
 #include "bf.h"
+#include "record.h"
 
 #define CALL_BF(call,error_msg)       	\
 {										\
@@ -37,10 +37,13 @@ typedef enum {
 HashTableCell* CreateHashTable(int file_dsc, int depth);
 HashTableCell* LoadTableFromDisk(int file_dsc);
 HashTableCell* DoubleHashTable(int file_dsc, int old_depth, HashTableCell* hash_table_old);
+HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table, uint hash_value, int* created_block_id);
+BF_ErrorCode UpdateHashTableValue(HashTableCell *hashtable, int index, int value, int file_dsc);
 int FreeHashTable(HashTableCell* hash_table);
-HashTableCell* SplitBlock(int block_id, int file_dsc, HashTableCell* hash_table, uint hash_value);
+
 int min(int a, int b);
 uint hash_function(unsigned int x, unsigned int size);
-
+int InsertRecordInBlock(void* data,Record record, int max_records);
+int RehashRecords(void* block_data, void* new_block_data, int record_block_id, int new_record_block_id, HashTableCell* hash_table, uint hash_table_size);
 
 #endif // UTILITY_H
