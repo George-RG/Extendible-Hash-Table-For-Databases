@@ -164,6 +164,19 @@ HT_ErrorCode HT_OpenIndex(const char *fileName, int *indexDesc)
 	file_table[available_index].file_desc = file_desc;
 	file_table[available_index].filename = malloc(strlen(fileName) + 1);
 	file_table[available_index].hash_table = LoadTableFromDisk(file_desc);
+
+	printf(":: INFO  ::File %s opened with index %d\n", fileName, available_index);
+
+	if (file_table[available_index].hash_table == NULL)
+	{
+		printf(":: INFO  ::File %s has no hash table\n", fileName);
+	}
+	else
+	{
+		printf(":: DEBUG :: Showing hash table...\n");
+		show_hash_table(file_table[available_index].hash_table, 1 << ht_info->global_depth, file_desc);
+	}
+
 	strcpy(file_table[available_index].filename, fileName);
 
 	// Return the index of the file
@@ -198,6 +211,9 @@ HT_ErrorCode HT_CloseFile(int indexDesc)
 	HT_info *ht_info = (HT_info *)BF_Block_GetData(first_block);
 	int depth = ht_info->global_depth;
 
+	printf("File with index %d had hash table:\n", indexDesc);
+	show_hash_table(file_table[indexDesc].hash_table, 1 << depth, file_desc);
+
 	// Set the block as dirty because we changed it and unpin it
 	BF_Block_SetDirty(first_block);
 	CALL_BF(BF_UnpinBlock(first_block), "Error unpinning block in HT_CloseFile\n");
@@ -213,8 +229,6 @@ HT_ErrorCode HT_CloseFile(int indexDesc)
 	free(file_table[indexDesc].filename);
 	file_table[indexDesc].filename = NULL;
 
-	printf("File with index %d had hash table:\n", indexDesc);
-	show_hash_table(file_table[indexDesc].hash_table, 1 << depth, file_desc);
 
 	FreeHashTable(file_table[indexDesc].hash_table);
 	file_table[indexDesc].hash_table = NULL;
@@ -336,7 +350,7 @@ HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 
 		hash_table = SplitBlock(record_block_id, file_desc, hash_table, hash_value, &new_record_block_id);
 		file_table[indexDesc].hash_table = hash_table;
-		hash_table_size = 1 << ht_info->global_depth; // Update to the new size of the hash table
+		hash_table_size = 1 << ht_info->global_depth; // Update to the new size of the hash table incase it was doubled
 
 		// Open the new block
 		CALL_BF(BF_GetBlock(file_desc, new_record_block_id, new_record_block), "Error getting block in DoubleHashTable\n");
@@ -350,16 +364,33 @@ HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 			return HT_ERROR;
 		}
 
-		// Mark both blocks as dirty and unpin them
-		BF_Block_SetDirty(record_block);
-		CALL_BF(BF_UnpinBlock(record_block), "Error unpinning block in DoubleHashTable\n");
-
-		BF_Block_SetDirty(new_record_block);
-		CALL_BF(BF_UnpinBlock(new_record_block), "Error unpinning block in DoubleHashTable\n");
-
+		int old_block_id = record_block_id;
 		// Rehash the new record
 		hash_value = hash_function(record.id, hash_table_size);
 		record_block_id = hash_table[hash_value].block_id;
+
+		// Mark both blocks as dirty
+		BF_Block_SetDirty(record_block);
+		BF_Block_SetDirty(new_record_block);
+
+		// Unpin only the block that will not be used in the next iteration
+		if(old_block_id == record_block_id)
+		{
+			BF_Block_SetDirty(new_record_block);
+			CALL_BF(BF_UnpinBlock(new_record_block), "Error unpinning block in DoubleHashTable\n");
+		}
+		else if(old_block_id == new_record_block_id)
+		{
+			BF_Block_SetDirty(record_block);
+			CALL_BF(BF_UnpinBlock(record_block), "Error unpinning block in DoubleHashTable\n");
+		}
+		else
+		{
+			CALL_BF(BF_UnpinBlock(record_block), "Error unpinning block in DoubleHashTable\n");
+			CALL_BF(BF_UnpinBlock(new_record_block), "Error unpinning block in DoubleHashTable\n");
+
+			printf(":: ERROR :: Both blocks were unpinned in DoubleHashTable\n");
+		}
 
 		// Load the new block and test again
 		CALL_BF(BF_GetBlock(file_desc, record_block_id, record_block), "Error getting block in DoubleHashTable\n");
@@ -376,7 +407,7 @@ HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 	}
 
 	// Insert the record to the right place in the block
-	status = InsertRecordInBlock(block_data, record, ht_info->number_of_records_per_block);\
+	status = InsertRecordInBlock(block_data, record, ht_info->number_of_records_per_block);
 	if(status != 0)
 	{
 		printf("Error inserting entry in file with index %d (Record not inserted)\n", indexDesc);
@@ -386,8 +417,7 @@ HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 HT_InsertEntry_inserted:
 
 	// Show the hash table before inserting the record
-	if(file_table[indexDesc].hash_table != NULL)
-		show_hash_table(file_table[indexDesc].hash_table, hash_table_size, file_desc);
+	show_hash_table(file_table[indexDesc].hash_table, hash_table_size, file_desc);
 
 	// Set the block as dirty because we changed it and unpin it
 	BF_Block_SetDirty(record_block);
@@ -515,4 +545,6 @@ void show_hash_table(HashTableCell *hash_table, int size, int file_dsc)
 
 		printf(":: DEBUG :: Hash table cell %d: block_id %d with local depth %d and %d entries\n", i, block_id, block_info->local_depth, block_info->number_of_records_on_block);
 	}
+
+	BF_Block_Destroy(&block);
 }

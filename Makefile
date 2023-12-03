@@ -105,7 +105,7 @@ remove_db:
 valgrind:
 	$(MAKE) clean
 	$(MAKE) $(EXEC) DEBUG=true
-	valgrind --error-exitcode=1 --leak-check=full --show-leak-kinds=all --track-origins=yes -s ./$(EXEC) $(ARGS)
+	valgrind --error-exitcode=1 --leak-check=full --show-leak-kinds=all --log-file=valgrind.log --track-origins=yes --tool=memcheck -s ./$(EXEC) $(ARGS)
 
 debug:
 	$(MAKE) clean

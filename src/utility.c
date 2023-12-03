@@ -299,6 +299,8 @@ In any error case NULL is returned
 
 The created_block_id is the id of the new block that was just created
 
+IMPORTANT!: The caller MUST unpin the blocks
+
 Note: This function updates the following fields in the metadata block:
 	- first_hash_table_block_id
 	- number_of_hash_table_blocks
@@ -330,8 +332,9 @@ HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table,
 	int new_hash_value = hash_value;
 	if (block_info->local_depth == ht_info->global_depth) // Case 2
 	{
+
+		int old_global_depth = ht_info->global_depth;
 		printf(":: DEBUG :: - Doubling the hash table - Hash value triggering the split: %d\n", hash_value);
-		printf(":: DEBUG :: - Doubling the hash table - Old global depth: %d\n", ht_info->global_depth);
 
 		// Double the hash table
 		hash_table = DoubleHashTable(file_dsc, ht_info->global_depth, hash_table);
@@ -341,7 +344,7 @@ HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table,
 			return NULL;
 		}
 
-		printf(":: DEBUG :: - New global depth: %d\n", ht_info->global_depth);
+		printf(":: DEBUG :: - Doubling the hash table - Old global depth: %d - New global depth: %d\n", old_global_depth, ht_info->global_depth);
 		new_hash_value = hash_value << 1;
 	}
 
@@ -358,6 +361,7 @@ HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table,
 	CALL_BF_PTR(BF_GetBlockCounter(file_dsc, &new_block_id), "Error getting block count in SplitBlock\n");
 	CALL_BF_PTR(BF_AllocateBlock(file_dsc, new_block), "Error allocating block in SplitBlock\n");
 	HT_block_info *new_block_info = (HT_block_info *)BF_Block_GetData(new_block);
+	memset(new_block_info, 0, BF_BLOCK_SIZE);
 	*created_block_id = new_block_id;
 
 	// Update the metadata of the blocks
@@ -365,6 +369,8 @@ HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table,
 
 	new_block_info->local_depth = block_info->local_depth;
 	new_block_info->number_of_records_on_block = 0;
+	BF_Block_SetDirty(record_block);
+	BF_Block_SetDirty(new_block);
 
 	// Update the pointers in the hash table
 	for (int i = ((last_friend_index - first_friend_index) / 2) + 1; i <= last_friend_index - first_friend_index; i++)
@@ -372,14 +378,12 @@ HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table,
 		UpdateHashTableValue(hash_table, first_friend_index + i, new_block_id, file_dsc);
 	}
 
-	// Clean up
-	BF_Block_SetDirty(record_block);
-	BF_Block_SetDirty(new_block);
 
-	CALL_BF_PTR(BF_UnpinBlock(record_block), "Error unpinning block in SplitBlock\n");
+	// Clean up
+	// CALL_BF_PTR(BF_UnpinBlock(record_block), "Error unpinning block in SplitBlock\n");
 	BF_Block_Destroy(&record_block);
 
-	CALL_BF_PTR(BF_UnpinBlock(new_block), "Error unpinning block in SplitBlock\n");
+	// CALL_BF_PTR(BF_UnpinBlock(new_block), "Error unpinning block in SplitBlock\n");
 	BF_Block_Destroy(&new_block);
 
 	BF_Block_Destroy(&metadata_block);
@@ -462,9 +466,45 @@ UpdateHashTableValue_error_exit:
 	return BF_ERROR;
 }
 
-uint hash_function(unsigned int x, unsigned int size)
-{
+// uint hash_function(unsigned int x, unsigned int size)
+// {
 
+// 	// Check if size is a power of 2
+// 	if ((size & (size - 1)) != 0)
+// 	{
+// 		fprintf(stderr, "Error in hash_function. Size is not a poower of 2\n");
+// 		return -1;
+// 	}
+
+// 	// Find the number of bits needed to represent size
+// 	// 8 - 1 = 1000 - 0001 = 00000000 00000000 00000000 00000111 
+
+// 	int leading_zeros = __builtin_clz(size - 1);
+// 	// int number_of_bits = 32 - leading_zeros;
+
+// 	// Keep the number of bits needed to represent size
+
+// 	// x = 00000000 00000000 01010001 01010111
+// 	// y = 00000000 00000000 00000000 01111111 
+
+// 	// new_x = 00000000 00000000 00000000 01010111
+
+
+// 	// int new_x = x & ((1 << number_of_bits) - 1);
+// 	// return new_x;
+
+// 	return x >> leading_zeros;
+
+// 	// return x % size;
+// }
+
+#define FNV_offset_basis 2166136261
+#define FNV_prime 16777619
+
+// We will hash the int using the FNV-1a hash function
+// And then keep the most significant bits needed to represent the size of the hash table
+uint hash_function(uint x, size_t size)
+{
 	// Check if size is a power of 2
 	if ((size & (size - 1)) != 0)
 	{
@@ -472,24 +512,20 @@ uint hash_function(unsigned int x, unsigned int size)
 		return -1;
 	}
 
-	// Find the number of bits needed to represent size
-	// 8 - 1 = 1000 - 0001 = 00000000 00000000 00000000 00000111 
 
-	int leading_zeros = __builtin_clz(size - 1);
-	int number_of_bits = 32 - leading_zeros;
+	uint hash = FNV_offset_basis;
+
+	// 32 bit FNV-1a hash
+	for (int i = 0; i < sizeof(int); i++)
+	{
+		hash ^= (x >> (i * 8)) & 0xff;
+		hash *= FNV_prime;
+	}
 
 	// Keep the number of bits needed to represent size
+	int leading_zeros = __builtin_clz(size - 1);
 
-	// x = 00000000 00000000 01010001 01010111
-	// y = 00000000 00000000 00000000 01111111 
-
-	// new_x = 00000000 00000000 00000000 01010111
-
-
-	// int new_x = x & ((1 << number_of_bits) - 1);
-	// return new_x;
-
-	return x >> leading_zeros;
+	return hash >> leading_zeros;
 }
 
 int min(int a, int b)
@@ -568,8 +604,9 @@ int RehashRecords(void *block_data, void *new_block_data, int record_block_id, i
 
 		// Rehash the record
 		uint hash_value = hash_function(temp_record.id, hash_table_size);
+		uint old_hash_value = hash_function(temp_record.id, hash_table_size >> 1);
 
-		printf(":: DEBUG :: - RehashRecords - Record with id %d was rehashed to %d and is inserted in bin %d\n", temp_record.id, hash_value, hash_table[hash_value].block_id );
+		printf(":: DEBUG :: - RehashRecords - Record with id %d was rehashed to %d (original %d) and is inserted in bin %d\n", temp_record.id, hash_value, old_hash_value, hash_table[hash_value].block_id );
 
 		if(hash_table[hash_value].block_id == record_block_id)
 		{

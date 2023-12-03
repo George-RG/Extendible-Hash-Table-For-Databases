@@ -70,9 +70,6 @@ int main(void)
 
 	HT_CreateIndex(FILE_NAME, GLOBAL_DEPT);
 
-	if (HT_OpenIndex(FILE_NAME, &indexDesc) != HT_OK)
-		goto exit_program;
-
 	show_files();
 
 	Record record;
@@ -95,6 +92,12 @@ int main(void)
 
 		CALL_OR_DIE(HT_InsertEntry(indexDesc, record));
 	}
+
+	if (HT_CloseFile(indexDesc) != HT_OK)
+		goto exit_program;
+
+	if (HT_OpenIndex(FILE_NAME, &indexDesc) != HT_OK)
+		goto exit_program;
 
 	if (HT_CloseFile(indexDesc) != HT_OK)
 		goto exit_program;

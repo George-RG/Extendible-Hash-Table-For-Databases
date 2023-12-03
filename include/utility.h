@@ -42,7 +42,7 @@ BF_ErrorCode UpdateHashTableValue(HashTableCell *hashtable, int index, int value
 int FreeHashTable(HashTableCell* hash_table);
 
 int min(int a, int b);
-uint hash_function(unsigned int x, unsigned int size);
+uint hash_function(uint x, size_t size);
 int InsertRecordInBlock(void* data,Record record, int max_records);
 int RehashRecords(void* block_data, void* new_block_data, int record_block_id, int new_record_block_id, HashTableCell* hash_table, uint hash_table_size);
 
