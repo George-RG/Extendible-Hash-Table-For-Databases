@@ -165,9 +165,7 @@ HashTableCell *DoubleHashTable(int file_dsc, int old_depth, HashTableCell *hash_
 	BF_Block_Destroy(&hash_table_block);
 
 	// Destroy the metadata block after updating it
-	// BF_Block_SetDirty(metadata_block);
-	// // TODO check if this is needed
-	// CALL_BF_PTR(BF_UnpinBlock(metadata_block), "Error unpinning block in DoubleHashTable\n");
+	BF_Block_SetDirty(metadata_block);
 	BF_Block_Destroy(&metadata_block);
 
 	// Free the unused tables
@@ -377,7 +375,6 @@ HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table,
 	{
 		UpdateHashTableValue(hash_table, first_friend_index + i, new_block_id, file_dsc);
 	}
-
 
 	// Clean up
 	// CALL_BF_PTR(BF_UnpinBlock(record_block), "Error unpinning block in SplitBlock\n");

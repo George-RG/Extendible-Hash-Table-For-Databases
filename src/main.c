@@ -1,10 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "hash_file.h"
 
-#define RECORDS_NUM 40 // you can change it if you want
+#define RECORDS_NUM 1000 // you can change it if you want
 #define GLOBAL_DEPT 2 // you can change it if you want
 #define FILE_NAME "data.db"
 
@@ -65,12 +66,25 @@ int main(void)
 
 	int indexDesc;
 
-	// if(HT_CreateIndex(FILE_NAME, GLOBAL_DEPT) != HT_OK)
-	// 	goto exit_program;
+	int flag = 1;
+	// If the file already exists, flag is 0, else 1
+	if (access(FILE_NAME, F_OK) != -1)
+		flag = 0;
 
 	HT_CreateIndex(FILE_NAME, GLOBAL_DEPT);
 
+	if (HT_OpenIndex(FILE_NAME, &indexDesc) != HT_OK)
+		goto exit_program;
+
 	show_files();
+	
+	if(flag == 0)
+	{
+		printf("File already exists\n");
+		printf("Printing all entries...\n");
+		HT_PrintAllEntries(indexDesc, NULL);
+		goto exit_program;
+	}
 
 	Record record;
 	srand(12569874);
@@ -99,6 +113,10 @@ int main(void)
 	if (HT_OpenIndex(FILE_NAME, &indexDesc) != HT_OK)
 		goto exit_program;
 
+	// Print all entries
+	printf("Printing all entries...\n");
+	HT_PrintAllEntries(indexDesc, NULL);
+
 	if (HT_CloseFile(indexDesc) != HT_OK)
 		goto exit_program;
 
@@ -111,3 +129,6 @@ exit_program:
 	HT_Close();
 	return -1;
 }
+
+
+
