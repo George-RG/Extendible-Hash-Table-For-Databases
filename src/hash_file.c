@@ -207,13 +207,6 @@ HT_ErrorCode HT_CloseFile(int indexDesc)
 	BF_Block_Init(&first_block);
 	BF_GetBlock(file_desc, 0, first_block);
 
-	// Get the data of the block and cast it to HT_info
-	HT_info *ht_info = (HT_info *)BF_Block_GetData(first_block);
-	int depth = ht_info->global_depth;
-
-	printf("File with index %d had hash table:\n", indexDesc);
-	show_hash_table(file_table[indexDesc].hash_table, 1 << depth, file_desc);
-
 	// Set the block as dirty because we changed it and unpin it
 	BF_Block_SetDirty(first_block);
 	CALL_BF(BF_UnpinBlock(first_block), "Error unpinning block in HT_CloseFile\n");
@@ -605,9 +598,18 @@ HT_ErrorCode HashStatistics(char* filename)
 	int max_records=0;
 	int total_records=0;
 
+	bool* seen = calloc(total_blocks,sizeof(bool));
+
 	for (int i = 0; i < hash_table_size; i++)
 	{
 		int record_block_id = hash_table[i].block_id;
+		
+		if(record_block_id==-1 || seen[record_block_id]==true)
+		{
+			continue;
+		}
+
+		seen[record_block_id]=true;
 
 		if(BF_GetBlock(file_desc, record_block_id, record_block)!= BF_OK)
 		{
@@ -651,6 +653,7 @@ HT_ErrorCode HashStatistics(char* filename)
 	retval=HT_OK;
 
 	HashStatistics_close_record_leave:
+		free(seen);
 		BF_Block_Destroy(&record_block);
 
 	HashStatistics_close_metadata_leave:

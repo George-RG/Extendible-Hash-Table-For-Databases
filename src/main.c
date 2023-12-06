@@ -113,9 +113,9 @@ int main(void)
 	if (HT_OpenIndex(FILE_NAME, &indexDesc) != HT_OK)
 		goto exit_program;
 
-	// Print all entries
-	printf("Printing all entries...\n");
-	HT_PrintAllEntries(indexDesc, NULL);
+	// // Print all entries
+	// printf("Printing all entries...\n");
+	// HT_PrintAllEntries(indexDesc, NULL);
 
 	// Print statistics
 	printf("Printing statistics...\n");
