@@ -76,4 +76,6 @@ HT_ErrorCode HT_PrintAllEntries(
 	);
 
 
+HT_ErrorCode HashStatistics(char* filename);
+
 #endif // HASH_FILE_H

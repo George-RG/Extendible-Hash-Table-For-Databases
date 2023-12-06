@@ -106,6 +106,7 @@ HashTableCell *DoubleHashTable(int file_dsc, int old_depth, HashTableCell *hash_
 		}
 		else
 		{
+			printf(":: DEBUG :: A new block was allocated with ramaining cells: %ld and %d cells per block\n",remaining_size,ht_info->cells_per_hash_block);
 			CALL_BF_PTR(BF_GetBlockCounter(file_dsc, &cur_block_id), "Error getting block count in DoubleHashTable");
 			CALL_BF_PTR(BF_AllocateBlock(file_dsc, hash_table_block), "Error allocating block in DoubleHashTable\n");
 			void *block_data = (void *)BF_Block_GetData(hash_table_block);

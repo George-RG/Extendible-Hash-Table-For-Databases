@@ -642,10 +642,11 @@ HT_ErrorCode HashStatistics(char* filename)
 
 	printf("Total blocks: %d\n",total_blocks);
 	printf("\tHash table blocks: %d\n",hash_table_blocks);
-	printf("\tData blocks: %d\n",total_blocks-hash_table_blocks);
+	printf("\tData blocks: %d\n",total_blocks-hash_table_blocks - 1);
+	printf("\tMetadata block: 1\n");
 	printf("Max records per block: %d\n",max_records);
 	printf("Min records per block: %d\n",min_records);
-	printf("Average records per block: %f\n",(float)total_records/(float)total_blocks);
+	printf("Average records per block: %f\n",(float)total_records/(float)(total_blocks-hash_table_blocks - 1));
 
 	retval=HT_OK;
 

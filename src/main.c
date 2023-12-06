@@ -117,6 +117,10 @@ int main(void)
 	printf("Printing all entries...\n");
 	HT_PrintAllEntries(indexDesc, NULL);
 
+	// Print statistics
+	printf("Printing statistics...\n");
+	HashStatistics(FILE_NAME);
+
 	if (HT_CloseFile(indexDesc) != HT_OK)
 		goto exit_program;
 
