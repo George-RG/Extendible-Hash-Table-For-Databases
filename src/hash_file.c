@@ -538,3 +538,129 @@ int show_hash_table(HashTableCell *hash_table, int size, int file_dsc)
 
 	return 0;
 }
+
+//Statistics
+HT_ErrorCode HashStatistics(char* filename)
+{
+	int total_blocks=0;
+	int hash_table_blocks=0;
+
+	int file_desc=-1;
+	int indexDesc=-1;
+	int retval=HT_OK;
+	bool was_in_table=false;
+
+	// If the file already exists get the index of the file
+	for (int i=0;i<MAX_OPEN_FILES;i++)
+	{
+		if(strcmp(filename,file_table[i].filename)==0)
+		{
+			indexDesc=i;
+			was_in_table=true;
+			break;
+		}
+	}
+
+	//  Else open it
+	if(indexDesc==-1)
+	{
+		if(HT_OpenIndex(filename, &indexDesc) != HT_OK)
+		{
+			perror("Error opening file in HashStatistics\n");
+			retval=HT_ERROR;
+			goto HashStatistics_leave;
+		}
+	}
+
+	file_desc=file_table[indexDesc].file_desc;
+
+
+	if(BF_GetBlockCounter(file_desc,&total_blocks)!=BF_OK)
+	{
+		perror("Error getting block counter in HashStatistics\n");
+		retval=HT_ERROR;
+		goto HashStatistics_close_file_leave;
+	}
+
+	BF_Block *metadata_block;
+	BF_Block_Init(&metadata_block);
+	if(BF_GetBlock(file_desc,0,metadata_block)!= BF_OK)
+	{
+		perror("Error getting metadata block in HashStatistics\n");
+		retval=HT_ERROR;
+		goto HashStatistics_close_metadata_leave;
+	}
+	HT_info *ht_info = (HT_info *)BF_Block_GetData(metadata_block);
+	hash_table_blocks=ht_info->number_of_hash_table_blocks;
+
+
+	HashTableCell* hash_table;
+	hash_table = file_table[indexDesc].hash_table;
+
+	BF_Block *record_block;
+	BF_Block_Init(&record_block);
+
+	int hash_table_size = 1 << ht_info->global_depth;
+	int min_records=ht_info->number_of_records_per_block;
+	int max_records=0;
+	int total_records=0;
+
+	for (int i = 0; i < hash_table_size; i++)
+	{
+		int record_block_id = hash_table[i].block_id;
+
+		if(BF_GetBlock(file_desc, record_block_id, record_block)!= BF_OK)
+		{
+			perror("Error getting block in HashStatistics\n");
+			retval=HT_ERROR;
+			goto HashStatistics_close_record_leave;
+		}
+		void *block_data = (void *)BF_Block_GetData(record_block);
+
+		HT_block_info *block_info = (HT_block_info *)block_data;
+
+		if(block_info->number_of_records_on_block>max_records)
+		{
+			max_records=block_info->number_of_records_on_block;
+		}
+
+		if(block_info->number_of_records_on_block<min_records)
+		{
+			min_records=block_info->number_of_records_on_block;
+		}
+
+		total_records+=block_info->number_of_records_on_block;
+	
+		// Set the block as dirty because we changed it and unpin it
+		if(BF_UnpinBlock(record_block) != BF_OK)
+		{
+			perror("Error unpinning block in HashStatistics\n");
+			retval=HT_ERROR;
+			goto HashStatistics_close_record_leave;
+		}
+	}
+
+	printf("Total blocks: %d\n",total_blocks);
+	printf("\tHash table blocks: %d\n",hash_table_blocks);
+	printf("\tData blocks: %d\n",total_blocks-hash_table_blocks);
+	printf("Max records per block: %d\n",max_records);
+	printf("Min records per block: %d\n",min_records);
+	printf("Average records per block: %f\n",(float)total_records/(float)total_blocks);
+
+	retval=HT_OK;
+
+	HashStatistics_close_record_leave:
+		BF_Block_Destroy(&record_block);
+
+	HashStatistics_close_metadata_leave:
+		BF_Block_Destroy(&metadata_block);
+
+	HashStatistics_close_file_leave:
+	if(was_in_table==false)
+	{
+		HT_CloseFile(file_desc);
+	}
+
+	HashStatistics_leave:
+		return retval;
+}
