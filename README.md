@@ -25,24 +25,24 @@
 
 The structure that we created was made with the following things in mind:
 
-- `<a id="reliability_subsection"></a>` __*Reliability*__`<br>`
+- <a id="reliability_subsection"></a> __*Reliability*__<br>
   We wanted to make sure that the data as well as the table are secure. So while we use the hashtable directly from the memory of the system, we also keep an exact copy of it in the disk. This way, if the system crashes, we can recover the data from the disk.
-- __*Performance*__`<br>`
+- __*Performance*__<br>
   We also kept in mind that this structure may be used for tons of data so no slow downs are allowed. For this reason we keep the hashtable in the system's memory and only update it to the disk when it is necessary. This way we ensure the fast speed of both reading and writing data for the majority of the actions.
 
   > Another optimization that we made is to always keep the metadata of the file pinned in the memory. This way we avoid the overhead of pinning and unpinning it every time we want to use it. ( It is used alot XD )
   >
-- __*Space efficiency*__`<br>`
+- __*Space efficiency*__<br>
   We wanted to make sure that we use the minimum amount of space possible. To achieve this, we try to utilize the allocated blocks to the maximum. For example, when writing the hash table to the disk, we first write in the pre allocated blocks that we already had the old hash table written on. If there is not enough space in these blocks, we allocate new ones and write the hash table there.
 
   > This forces as to use a list structure for the hash table blocks so that we can easily add new blocks to the end of the list as well as to keep track of the blocks that we have already used as they are among all the data blocks of the file.
   >
 
-### `<a id="user_function_subsection"></a>` User Functions
+### <a id="user_function_subsection"></a> User Functions
 
 > __NOTE__ : Any function that returns an int returns `HT_OK` on success and `HT_ERROR` on failure.
 
-- __*HT_Init*__  `<br>`
+- __*HT_Init*__  <br>
   This function is used to initialize the BF layer which we will use for writting to the disk. It also creates a table in the memory with the information of the files that are open. These information include the file descriptor, the name of the file and a pointer to the hash table of the file in the memory. The table is global to the file with all HT functions because we want only these functions to have access to it.
 
   The structure of the file table is the following:
@@ -56,7 +56,7 @@ The structure that we created was made with the following things in mind:
   ```
 
   </br>
-- __*HT_CreateIndex*__ `<br>`
+- __*HT_CreateIndex*__ <br>
   This function is used for the creation of a new Hash Table file. It creates a new file with the given name and then initializes the metadata of the file which are stored in the first block of the file.
 
   The file metadata structure is the following:
@@ -81,18 +81,18 @@ The structure that we created was made with the following things in mind:
   >
 
   </br>
-- __*HT_OpenIndex*__ `<br>`
+- __*HT_OpenIndex*__ <br>
   This function is responsible for loading an Index with a specific name from the disk. For later use, it pins the first block of the file which contains the metadata of the file and it leaves it pinned until the file is closed. Also if the file contains a hash table, it loads it in the memory from the file using the [LoadTableFromDisk](#function_loadtablefromdisk). Finally, it returns the index of the file in the file table
 
   > Along with all the above, the function performs some checks to see if the file is already open or if the file is a hash table file. If any of these checks fail, the function returns `HT_ERROR`.
   >
 
   </br>
-- __*HT_CloseFile*__ `<br>`
+- __*HT_CloseFile*__ <br>
   This function is used to close an open Hash Table file with a given index in the file table. It sets as dirty the metadata block of the file and unpins it. After that, it closes the file and removes it from the file table, freeing the memory that was used.
 
   </br>
-- `<a id="function_ht_insertentry"></a>` __*HT_InsertEntry*__ `<br>`
+- <a id="function_ht_insertentry"></a> __*HT_InsertEntry*__ <br>
   This function inserts a new record in the Hash Table file with a given index in the file table. It uses a [FNV-1a](https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function) __hash_function__ to hash the record ID
 
   > Of this hash value only the __N__ most significant bits are used, where __N__ is the global depth of the hash table. This way we can use the same hash function for all the hash tables and we can change the global depth of the hash table without having to rehash all the records.
@@ -113,11 +113,11 @@ The structure that we created was made with the following things in mind:
   >
 
   <br>
-- __*HT_PrintAllEntries*__ `<br>`
+- __*HT_PrintAllEntries*__ <br>
   The function is used to print all the records of a file with record.id equal to the given id. If the id is `NULL` then it prints all the records of the file. This is done by iterating through all the blocks of the hash table.
 
   <br>
-- __*HashStatistics*__ `<br>`
+- __*HashStatistics*__ <br>
   Given a name, print some statistics for the file.
 
   > In case the file is not open , the function opens it to get the statistics and then closes it again.
@@ -133,22 +133,22 @@ The structure that we created was made with the following things in mind:
   - Minimum amount of records that a block contains
   - Average amount of records stored in a block among all the blocks.
 
-### `<a id="internal_function_subsection"></a>` Internal Functions
+### <a id="internal_function_subsection"></a> Internal Functions
 
-- `<a id="function_splitblock"></a>`
-  __*SplitBlock*__ `<br>`
-  This function splits buddies into two blocks. It is used when we have to split a block because it is full. This function also calls [DoubleHashTable](#function_doublehashtable) if the global depth of the hash table is equal to the local depth of the block that we are splitting. In other words we double the size of the hash table if the block that fills up does not have any buddies.`<br>`
+- <a id="function_splitblock"></a>
+  __*SplitBlock*__ <br>
+  This function splits buddies into two blocks. It is used when we have to split a block because it is full. This function also calls [DoubleHashTable](#function_doublehashtable) if the global depth of the hash table is equal to the local depth of the block that we are splitting. In other words we double the size of the hash table if the block that fills up does not have any buddies.<br>
 
   After the allocation of the new block we call the [RehashRecords](#function_rehashrecords) function to rehash all the records of the old block to the old and new one. Finally, we update the metadata of the file and we set as dirty the old and the new block.
-- `<a id="function_rehashrecords"></a>`
-  __*RehashRecords*__ `<br>`
+- <a id="function_rehashrecords"></a>
+  __*RehashRecords*__ <br>
 
   This function is responsible for rehashing all the records of a block. It is used when we split a block with [SplitBlock](#function_splitblock) and we rehash all the records of the old block to the old and new one.
 
   > An important technical __note__ is that this function takes as input two pointers to the block data in order to avoid opening and closing the blocks again.
   >
-- `<a id="function_doublehashtable"></a>`
-  __*DoubleHashTable*__ `<br>`
+- <a id="function_doublehashtable"></a>
+  __*DoubleHashTable*__ <br>
 
   This function is used to double the size of the hash table. It is used when we need to split a block ([SplitBlock](#function_splitblock)) but the block does not have any buddies. In this case we have to double the size of the hash table so that we can split the block.
 
@@ -157,10 +157,16 @@ The structure that we created was made with the following things in mind:
 
   > __NOTE__ : As said above ([Reliability section](#reliability_subsection)), this function updates both the memory hash table and the disk hash table.
   >
-- `<a id="function_createhashtable"></a>`
-  __*CreateHashTable*__ `<br>`
+- <a id="function_createhashtable"></a>
+  __*CreateHashTable*__ <br>
 
   This function is used to create a hash table both on the disk and the memory. It is used when we add the first entry to a file ([HT_InsertEntry](#function_ht_insertentry)) and we need to create a hash table for the file.
 
   > __TECHNICAL NOTE__ : This is not an actual function. It actually calls the function [DoubleHashTable](#function_doublehashtable) with the arguments a little bit changed.
   >
+
+- <a id="function_loadtablefromdisk"></a>
+  __*LoadTableFromDisk*__ <br>
+  This is a helper function responsible for loading the hash table stored in the file to the main mamory when the file gets opened.
+
+  >__IMPORTANT__: This function will return NULL if any error occurs and an error message will be shown. __BUT__ in the current state of the program this is wanted whenever a new file is opened. This is because we want to initailize the pointer to the hash table to NULL in the new file. So be careful when reading errors from this function. 
