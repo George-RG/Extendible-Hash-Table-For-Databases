@@ -5,7 +5,7 @@
 
 #include "hash_file.h"
 
-#define RECORDS_NUM 1000 // you can change it if you want
+#define RECORDS_NUM 1000000 // you can change it if you want
 #define GLOBAL_DEPT 2 // you can change it if you want
 #define FILE_NAME "data.db"
 #define FILE_NAME2 "data2.db"
@@ -77,7 +77,17 @@ int main(void)
 	if (HT_OpenIndex(FILE_NAME, &indexDesc) != HT_OK)
 		goto exit_program;
 
+	// Try to open a file that is already open
+	int index_of_reopen;
+	if(HT_OpenIndex(FILE_NAME, &index_of_reopen) != HT_OK)
+		goto exit_program;
+
+	// See what the file table contains
 	show_files();
+
+	// Close the file
+	if(HT_CloseFile(index_of_reopen) != HT_OK)
+		goto exit_program;
 	
 	if(flag == 0)
 	{
@@ -103,7 +113,10 @@ int main(void)
 		r = rand() % 10;
 		memcpy(record.city, cities[r], strlen(cities[r]) + 1);
 
-		printf("Record %d: with this data was inserted: %d, %s, %s, %s\n in data.db", id, record.id, record.name, record.surname, record.city);
+		// printf("Record %d: with this data was inserted: %d, %s, %s, %s in data.db\n", id, record.id, record.name, record.surname, record.city);
+
+		if(id % 10000 == 0)
+			printf("Inserted %d records\n", id);
 
 		CALL_OR_DIE(HT_InsertEntry(indexDesc, record));
 	}
@@ -117,7 +130,7 @@ int main(void)
 		goto exit_program;
 
 	// Insert some records
-	printf("Inserting %d records in data2.db...\n", RECORDS_NUM);
+	printf("Inserting 10 records in data2.db...\n");
 	for (int id = 0; id < 10; ++id)
 	{
 		// create a record with random data
@@ -130,7 +143,7 @@ int main(void)
 		r = rand() % 10;
 		memcpy(record.city, cities[r], strlen(cities[r]) + 1);
 
-		printf("Record %d: with this data was inserted: %d, %s, %s, %s\n in data2.db", id, record.id, record.name, record.surname, record.city);
+		// printf("Record %d: with this data was inserted: %d, %s, %s, %s in data2.db\n", id, record.id, record.name, record.surname, record.city);
 
 		CALL_OR_DIE(HT_InsertEntry(indexDesc2, record));
 	}
@@ -155,6 +168,11 @@ int main(void)
 
 	CALL_OR_DIE(HT_InsertEntry(indexDesc2, record));
 
+	// Print entries with ID 0
+	printf("Printing record with ID 0 in data2.db...\n");
+	int id_0 = 0;
+	HT_PrintAllEntries(indexDesc2, &id_0);
+
 	// Now try printing the records
 	printf("Printing all entries from data2.db...\n");
 	HT_PrintAllEntries(indexDesc2, NULL);
@@ -164,10 +182,12 @@ int main(void)
 	HashStatistics(FILE_NAME2);
 
 	// Close the old file (data.db)
+	printf("Closing data.db...\n");
 	if (HT_CloseFile(indexDesc) != HT_OK)
 		goto exit_program;
 
 	// Reopen the old file (data.db)
+	printf("Reopening data.db...\n");
 	if (HT_OpenIndex(FILE_NAME, &indexDesc) != HT_OK)
 		goto exit_program;
 

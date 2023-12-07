@@ -18,11 +18,19 @@ note: This function updates the following fields in the metadata block:
 */
 HashTableCell *DoubleHashTable(int file_dsc, int old_depth, HashTableCell *hash_table_old)
 {
+	HashTableCell *retval = NULL;
+	BF_ErrorCode err = BF_OK;
+
 	// Find the blocks that the table was stored in
 	BF_Block *metadata_block;
 	BF_Block_Init(&metadata_block);
 
-	CALL_BF_PTR(BF_GetBlock(file_dsc, 0, metadata_block), "Error getting block in UpdateHashTable\n");
+	err = BF_GetBlock(file_dsc, 0, metadata_block);
+	if (err != BF_OK)
+	{
+		perror("Error in DoubleHashTable - BF_GetBlock returned Error Code\n");
+		goto DoubleHashTable_destroy_metadata_leave;
+	}
 
 	HT_info *ht_info = (HT_info *)BF_Block_GetData(metadata_block);
 
@@ -56,6 +64,9 @@ HashTableCell *DoubleHashTable(int file_dsc, int old_depth, HashTableCell *hash_
 		free(hash_table_old);
 	}
 
+	BF_Block *hash_table_block;
+	BF_Block_Init(&hash_table_block);
+
 	int *old_used_blocks = NULL;
 	int old_used_blocks_num = ht_info->number_of_hash_table_blocks;
 	if (ht_info->first_hash_table_block_id != -1)
@@ -64,64 +75,87 @@ HashTableCell *DoubleHashTable(int file_dsc, int old_depth, HashTableCell *hash_
 		old_used_blocks[0] = ht_info->first_hash_table_block_id;
 
 		// Find the blocks that the table was stored in
-		BF_Block *hash_table_block;
-		BF_Block_Init(&hash_table_block);
 		int next_block_id = ht_info->first_hash_table_block_id;
 
 		for (int i = 1; i < ht_info->number_of_hash_table_blocks; i++)
 		{
 			if (next_block_id == -1)
 			{
-				printf("Error in DoubleHashTable(next_block_id == -1)\n");
-				return NULL;
+				perror("Error in DoubleHashTable(next_block_id == -1)\n");
+				retval = NULL;
+				goto DoubleHashTable_destroy_hash_table_block_leave;
 			}
 
-			CALL_BF_PTR(BF_GetBlock(file_dsc, next_block_id, hash_table_block), "Error getting first block in DoubleHashTable\n");
+			err = BF_GetBlock(file_dsc, next_block_id, hash_table_block);
+			if (err != BF_OK)
+			{
+				perror("Error in DoubleHashTable - Error getting first block\n");
+				goto DoubleHashTable_destroy_hash_table_block_leave;
+			}
+
 			HashTable_Block_metadata *first_block_metadata = (HashTable_Block_metadata *)BF_Block_GetData(hash_table_block);
 			next_block_id = first_block_metadata->next_block_id;
 			old_used_blocks[i] = next_block_id;
-			// Unpin the block
-			CALL_BF_PTR(BF_UnpinBlock(hash_table_block), "Error unpinning block in DoubleHashTable\n");
-		}
 
-		// Destroy the block because we don't need it anymore
-		BF_Block_Destroy(&hash_table_block);
+			// Clean Up
+			err = BF_UnpinBlock(hash_table_block);
+			if (err != BF_OK)
+			{
+				perror("Error in DoubleHashTable - Error unpinning block\n");
+				goto DoubleHashTable_destroy_hash_table_block_leave;
+			}
+		}
 	}
 
 	size_t remaining_size = new_table_size;
 	int remaining_preallocated_blocks = old_used_blocks_num;
-	BF_Block *hash_table_block;
-	BF_Block_Init(&hash_table_block);
 	int cur_block_id = -1;
 
 	int *new_block_ids = malloc(sizeof(int) * ceil((double)new_table_size / ht_info->cells_per_hash_block));
 	int new_blocks_num = 0;
+
 	while (remaining_size > 0)
 	{
 		if (remaining_preallocated_blocks > 0)
 		{
 			cur_block_id = old_used_blocks[old_used_blocks_num - remaining_preallocated_blocks];
-			CALL_BF_PTR(BF_GetBlock(file_dsc, cur_block_id, hash_table_block), "Error getting block in DoubleHashTable\n");
+			err = BF_GetBlock(file_dsc, cur_block_id, hash_table_block);
+			if (err != BF_OK)
+			{
+				perror("Error in DoubleHashTable - Error getting first block\n");
+				goto DoubleHashTable_free_new_block_ids_and_leave;
+			}
 			remaining_preallocated_blocks--;
 		}
 		else
 		{
-			printf(":: DEBUG :: A new block was allocated with ramaining cells: %ld and %d cells per block\n",remaining_size,ht_info->cells_per_hash_block);
-			CALL_BF_PTR(BF_GetBlockCounter(file_dsc, &cur_block_id), "Error getting block count in DoubleHashTable");
-			CALL_BF_PTR(BF_AllocateBlock(file_dsc, hash_table_block), "Error allocating block in DoubleHashTable\n");
+			err = BF_GetBlockCounter(file_dsc, &cur_block_id);
+			if (err != BF_OK)
+			{
+				perror("Error in DoubleHashTable - Error getting block count\n");
+				goto DoubleHashTable_free_new_block_ids_and_leave;
+			}
+
+			err = BF_AllocateBlock(file_dsc, hash_table_block);
+			if (err != BF_OK)
+			{
+				perror("Error in DoubleHashTable - Error allocating block\n");
+				goto DoubleHashTable_free_new_block_ids_and_leave;
+			}
+
 			void *block_data = (void *)BF_Block_GetData(hash_table_block);
 			memset(block_data, 0, BF_BLOCK_SIZE);
 		}
 
 		if (cur_block_id == -1)
 		{
-			printf("Error in DoubleHashTable(cur_block_id == -1)\n");
-			return NULL;
+			perror("Error in DoubleHashTable(cur_block_id == -1)\n");
+			retval = NULL;
+			goto DoubleHashTable_free_new_block_ids_and_leave;
 		}
 
 		if (ht_info->first_hash_table_block_id == -1)
 		{
-
 			ht_info->first_hash_table_block_id = cur_block_id;
 		}
 
@@ -140,7 +174,12 @@ HashTableCell *DoubleHashTable(int file_dsc, int old_depth, HashTableCell *hash_
 		block_metadata->next_block_id = -1;
 
 		BF_Block_SetDirty(hash_table_block);
-		CALL_BF_PTR(BF_UnpinBlock(hash_table_block), "Error unpinning block in DoubleHashTable\n");
+		err = BF_UnpinBlock(hash_table_block);
+		if (err != BF_OK)
+		{
+			perror("Error in DoubleHashTable - Error unpinning block\n");
+			goto DoubleHashTable_free_new_block_ids_and_leave;
+		}
 
 		new_block_ids[new_blocks_num] = cur_block_id;
 		new_blocks_num++;
@@ -151,30 +190,52 @@ HashTableCell *DoubleHashTable(int file_dsc, int old_depth, HashTableCell *hash_
 
 	for (int i = 0; i < new_blocks_num - 1; i++)
 	{
-		CALL_BF_PTR(BF_GetBlock(file_dsc, new_block_ids[i], hash_table_block), "Error getting block in DoubleHashTable\n");
+		err = BF_GetBlock(file_dsc, new_block_ids[i], hash_table_block);
+		if (err != BF_OK)
+		{
+			perror("Error in DoubleHashTable - Error getting block\n");
+			goto DoubleHashTable_free_new_block_ids_and_leave;
+		}
+
 		HashTable_Block_metadata *block_metadata = (HashTable_Block_metadata *)BF_Block_GetData(hash_table_block);
 		block_metadata->next_block_id = new_block_ids[i + 1];
 		BF_Block_SetDirty(hash_table_block);
-		CALL_BF_PTR(BF_UnpinBlock(hash_table_block), "Error unpinning block in DoubleHashTable\n");
+		err = BF_UnpinBlock(hash_table_block);
+		if (err != BF_OK)
+		{
+			perror("Error in DoubleHashTable - Error unpinning block\n");
+			goto DoubleHashTable_free_new_block_ids_and_leave;
+		}
 	}
 
 	// Update the metadata of the file
 	ht_info->number_of_hash_table_blocks = new_blocks_num;
 	ht_info->global_depth = old_depth + 1;
-
-	// Destroy the block because we don't need it anymore
-	BF_Block_Destroy(&hash_table_block);
-
-	// Destroy the metadata block after updating it
 	BF_Block_SetDirty(metadata_block);
-	BF_Block_Destroy(&metadata_block);
 
-	// Free the unused tables
-	free(new_block_ids);
+	// Success
+	retval = hash_table_new;
+
+DoubleHashTable_free_new_block_ids_and_leave:
+	if (new_block_ids != NULL)
+		free(new_block_ids);
+
+DoubleHashTable_destroy_hash_table_block_leave:
 	if (old_used_blocks != NULL)
 		free(old_used_blocks);
 
-	return hash_table_new;
+	BF_Block_Destroy(&hash_table_block);
+
+DoubleHashTable_destroy_metadata_leave:
+	BF_Block_Destroy(&metadata_block);
+
+	if (err != BF_OK)
+	{
+		BF_PrintError(err);
+		retval = NULL;
+	}
+
+	return retval;
 }
 
 /*
@@ -202,6 +263,9 @@ Note: The global depth in the metadata of the file MUST be correct
 */
 HashTableCell *LoadTableFromDisk(int file_dsc)
 {
+	HashTableCell * retval = NULL;
+	BF_ErrorCode err = BF_OK;
+
 	// Initialize the blocks that we will use
 	BF_Block *metadata_block; // Block for the file metadata
 	BF_Block_Init(&metadata_block);
@@ -211,12 +275,18 @@ HashTableCell *LoadTableFromDisk(int file_dsc)
 
 	HashTableCell *hash_table = NULL;
 
-	CALL_BF_PTR(BF_GetBlock(file_dsc, 0, metadata_block), "Error getting block in UpdateHashTable\n");
+	err = BF_GetBlock(file_dsc, 0, metadata_block);
+	if (err != BF_OK)
+	{
+		perror("Error in LoadTableFromDisk - Error getting metadata block\n");
+		goto LoadTableFromDisk_error_exit;
+	}
 
 	HT_info *ht_info = (HT_info *)BF_Block_GetData(metadata_block);
 
 	if (ht_info->first_hash_table_block_id == -1 || ht_info->number_of_hash_table_blocks == 0)
 	{
+		fprintf(stderr,"Error in LoadTableFromDisk - No hash table blocks found for file dsc %d\n", file_dsc);
 		goto LoadTableFromDisk_error_exit;
 	}
 
@@ -232,10 +302,17 @@ HashTableCell *LoadTableFromDisk(int file_dsc)
 	{
 		if (next_block_id == -1)
 		{
+			perror("Error in LoadTableFromDisk(next_block_id == -1)\n");
 			goto LoadTableFromDisk_error_exit;
 		}
 
-		CALL_BF_PTR(BF_GetBlock(file_dsc, next_block_id, hash_table_block), "Error getting first block in LoadTableFromDisk\n");
+		err = BF_GetBlock(file_dsc, next_block_id, hash_table_block);
+		if (err != BF_OK)
+		{
+			perror("Error in LoadTableFromDisk - Error getting first block\n");
+			goto LoadTableFromDisk_error_exit;
+		}
+
 		void *block_data = (void *)BF_Block_GetData(hash_table_block);
 
 		// Read the next block id
@@ -254,30 +331,32 @@ HashTableCell *LoadTableFromDisk(int file_dsc)
 		memcpy(table_data + offset_in_table, block_data, amount_of_cells_to_copy * sizeof(HashTableCell));
 
 		cells_to_read -= amount_of_cells_to_copy;
-		CALL_BF_PTR(BF_UnpinBlock(hash_table_block), "Error unpinning block in LoadTableFromDisk\n");
+		err = BF_UnpinBlock(hash_table_block);
+		if (err != BF_OK)
+		{
+			perror("Error in LoadTableFromDisk - Error unpinning block\n");
+			goto LoadTableFromDisk_error_exit;
+		}
 	}
 
-	// Destroy the block because we don't need it anymore
-	BF_Block_Destroy(&hash_table_block);
-
-	// Destroy the metadata block because we don't need it anymore
-	// TODO check if this is needed
-	// CALL_BF_PTR(BF_UnpinBlock(metadata_block), "Error unpinning block in LoadTableFromDisk\n");
-	BF_Block_Destroy(&metadata_block);
-
-	return hash_table;
+	// Success
+	retval = hash_table;
 
 LoadTableFromDisk_error_exit:
 
 	BF_Block_Destroy(&hash_table_block);
 	BF_Block_Destroy(&metadata_block);
 
-	if (hash_table != NULL)
+	if (hash_table != NULL && retval == NULL)
 		free(hash_table);
 
-	printf(":: ERROR :: - Error in LoadTableFromDisk - Check if it is intentional\n ");
+	if (err != BF_OK)
+	{
+		BF_PrintError(err);
+		retval = NULL;
+	}
 
-	return NULL;
+	return retval;
 }
 
 /*
@@ -307,16 +386,33 @@ Note: This function updates the following fields in the metadata block:
 */
 HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table, uint hash_value, int *created_block_id)
 {
+	HashTableCell *retval = NULL;
+	BF_ErrorCode err = BF_OK;
+
 	// Get the first block with the metadata
 	BF_Block *metadata_block;
 	BF_Block_Init(&metadata_block);
-	BF_GetBlock(file_dsc, 0, metadata_block);
+
+	err = BF_GetBlock(file_dsc, 0, metadata_block);
+	if (err != BF_OK)
+	{
+		perror("Error in SplitBlock - Error getting metadata block\n");
+		goto SplitBlock_destroy_metadata_block;
+	}
+
 	HT_info *ht_info = (HT_info *)BF_Block_GetData(metadata_block);
 
 	// Get the block to split
 	BF_Block *record_block;
 	BF_Block_Init(&record_block);
-	BF_GetBlock(file_dsc, block_id, record_block);
+
+	err = BF_GetBlock(file_dsc, block_id, record_block);
+	if (err != BF_OK)
+	{
+		perror("Error in SplitBlock - Error getting record block\n");
+		goto SplitBlock_destroy_record_block;
+	}
+
 	HT_block_info *block_info = (HT_block_info *)BF_Block_GetData(record_block);
 
 	// Initialize the new block
@@ -331,19 +427,14 @@ HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table,
 	int new_hash_value = hash_value;
 	if (block_info->local_depth == ht_info->global_depth) // Case 2
 	{
-
-		int old_global_depth = ht_info->global_depth;
-		printf(":: DEBUG :: - Doubling the hash table - Hash value triggering the split: %d\n", hash_value);
-
 		// Double the hash table
 		hash_table = DoubleHashTable(file_dsc, ht_info->global_depth, hash_table);
 		if (hash_table == NULL)
 		{
-			printf(":: ERROR :: - Error in SplitBlock\n");
-			return NULL;
+			perror("Error in SplitBlock - Error doubling hash table\n");
+			goto SplitBlock_destroy_new_block;
 		}
 
-		printf(":: DEBUG :: - Doubling the hash table - Old global depth: %d - New global depth: %d\n", old_global_depth, ht_info->global_depth);
 		new_hash_value = hash_value << 1;
 	}
 
@@ -357,8 +448,18 @@ HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table,
 	int last_friend_index = first_friend_index | ((1 << (ht_info->global_depth - block_info->local_depth)) - 1);
 
 	// Allocate the new block and get its id
-	CALL_BF_PTR(BF_GetBlockCounter(file_dsc, &new_block_id), "Error getting block count in SplitBlock\n");
-	CALL_BF_PTR(BF_AllocateBlock(file_dsc, new_block), "Error allocating block in SplitBlock\n");
+	if (BF_GetBlockCounter(file_dsc, &new_block_id) != BF_OK)
+	{
+		perror("Error in SplitBlock - Error getting Block Counter\n");
+		goto SplitBlock_destroy_new_block;
+	}
+
+	if (BF_AllocateBlock(file_dsc, new_block) != BF_OK)
+	{
+		perror("Error in SplitBlock - Error Allocating block\n");
+		goto SplitBlock_destroy_new_block;
+	}
+
 	HT_block_info *new_block_info = (HT_block_info *)BF_Block_GetData(new_block);
 	memset(new_block_info, 0, BF_BLOCK_SIZE);
 	*created_block_id = new_block_id;
@@ -377,26 +478,43 @@ HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table,
 		UpdateHashTableValue(hash_table, first_friend_index + i, new_block_id, file_dsc);
 	}
 
-	// Clean up
-	// CALL_BF_PTR(BF_UnpinBlock(record_block), "Error unpinning block in SplitBlock\n");
-	BF_Block_Destroy(&record_block);
+	retval = hash_table;
 
-	// CALL_BF_PTR(BF_UnpinBlock(new_block), "Error unpinning block in SplitBlock\n");
+	// Clean up
+SplitBlock_destroy_new_block:
 	BF_Block_Destroy(&new_block);
 
+SplitBlock_destroy_record_block:
+	BF_Block_Destroy(&record_block);
+
+SplitBlock_destroy_metadata_block:
 	BF_Block_Destroy(&metadata_block);
 
-	return hash_table;
+	if(err != BF_OK)
+	{
+		BF_PrintError(err);
+		retval = NULL;
+	}
+
+	return retval;
 }
 
 BF_ErrorCode UpdateHashTableValue(HashTableCell *hashtable, int index, int value, int file_dsc)
 {
+	BF_ErrorCode retval = BF_OK;
+
 	hashtable[index].block_id = value;
 
 	// file metadata block
 	BF_Block *metadata_block;
 	BF_Block_Init(&metadata_block);
-	BF_GetBlock(file_dsc, 0, metadata_block);
+
+	retval = BF_GetBlock(file_dsc, 0, metadata_block);
+	if (retval != BF_OK)
+	{
+		fprintf(stderr,"Error in UpdateHashTableValue - Error getting the block\n");
+		goto UpdateHashTableValue_destroy_metadata_block;
+	}
 	HT_info *ht_info = (HT_info *)BF_Block_GetData(metadata_block);
 
 	// Find the index of the block in the chain of blocks
@@ -412,11 +530,18 @@ BF_ErrorCode UpdateHashTableValue(HashTableCell *hashtable, int index, int value
 	{
 		if (next_block_id == -1)
 		{
-			printf("Error in UpdateHashTableValue(next_block_id == -1)\n");
-			goto UpdateHashTableValue_error_exit;
+			perror("Error in UpdateHashTableValue(next_block_id == -1)\n");
+			retval = BF_ERROR;
+			goto UpdateHashTableValue_destroy_hashtable_block_and_exit;
 		}
 
-		BF_GetBlock(file_dsc, next_block_id, hash_table_block);
+		retval = BF_GetBlock(file_dsc, next_block_id, hash_table_block);
+		if(retval != BF_OK)
+		{
+			perror("Error in UpdateHashTableValue - Error getting the block\n");
+			goto UpdateHashTableValue_destroy_hashtable_block_and_exit;
+		}
+		
 		HashTable_Block_metadata *block_metadata = (HashTable_Block_metadata *)BF_Block_GetData(hash_table_block);
 		block_data = ((void *)block_metadata) + sizeof(HashTable_Block_metadata);
 
@@ -428,13 +553,20 @@ BF_ErrorCode UpdateHashTableValue(HashTableCell *hashtable, int index, int value
 
 		next_block_id = block_metadata->next_block_id;
 		// unpin the block
-		BF_UnpinBlock(hash_table_block);
+
+		retval = BF_UnpinBlock(hash_table_block);
+		if(retval != BF_OK)
+		{
+			perror("Error in UpdateHashTableValue - Error getting the block\n");
+			goto UpdateHashTableValue_destroy_hashtable_block_and_exit;
+		}
 	}
 
 	if (block_data == NULL)
 	{
-		printf("Error in UpdateHashTableValue\n");
-		goto UpdateHashTableValue_error_exit;
+		perror("Error in UpdateHashTableValue\n");
+		retval = BF_ERROR;
+		goto UpdateHashTableValue_unpin_hashtable_block_and_exit;
 	}
 
 	// Update the block
@@ -445,23 +577,27 @@ BF_ErrorCode UpdateHashTableValue(HashTableCell *hashtable, int index, int value
 
 	// Set the block as dirty
 	BF_Block_SetDirty(hash_table_block);
-	CALL_BF(BF_UnpinBlock(hash_table_block), "Error unpinning block in UpdateHashTableValue\n");
+	retval = BF_UnpinBlock(hash_table_block);
+	if(retval != BF_OK)
+	{
+		perror("Error in UpdateHashTableValue - Error getting the block\n");
+		goto UpdateHashTableValue_destroy_hashtable_block_and_exit;
+	}
+
+UpdateHashTableValue_unpin_hashtable_block_and_exit:
+	retval = BF_UnpinBlock(hash_table_block);
+	if(retval != BF_OK)
+	{
+		perror("Error in UpdateHashTableValue - Error unpining the block\n");
+	}
+
+UpdateHashTableValue_destroy_hashtable_block_and_exit:
 	BF_Block_Destroy(&hash_table_block);
 
-	// Unpin the metadata block
-	// TODO possibly remove this
-	// BF_CALL(BF_UnpinBlock(metadata_block), "Error unpinning block in UpdateHashTableValue\n");
+UpdateHashTableValue_destroy_metadata_block:
 	BF_Block_Destroy(&metadata_block);
 
-	return BF_OK;
-
-UpdateHashTableValue_error_exit:
-
-	CALL_BF(BF_UnpinBlock(hash_table_block), "Error unpinning block in UpdateHashTableValue\n");
-	BF_Block_Destroy(&hash_table_block);
-	BF_Block_Destroy(&metadata_block);
-
-	return BF_ERROR;
+	return retval;
 }
 
 #define FNV_offset_basis 2166136261
@@ -477,7 +613,6 @@ uint hash_function(uint x, size_t size)
 		fprintf(stderr, "Error in hash_function. Size is not a poower of 2\n");
 		return -1;
 	}
-
 
 	uint hash = FNV_offset_basis;
 
@@ -572,9 +707,7 @@ int RehashRecords(void *block_data, void *new_block_data, int record_block_id, i
 		uint hash_value = hash_function(temp_record.id, hash_table_size);
 		uint old_hash_value = hash_function(temp_record.id, hash_table_size >> 1);
 
-		printf(":: DEBUG :: - RehashRecords - Record with id %d was rehashed to %d (original %d) and is inserted in bin %d\n", temp_record.id, hash_value, old_hash_value, hash_table[hash_value].block_id );
-
-		if(hash_table[hash_value].block_id == record_block_id)
+		if (hash_table[hash_value].block_id == record_block_id)
 		{
 			// The record stays in the old block
 			memcpy(records_array_in_block + records_in_old_block, &temp_record, sizeof(Record));

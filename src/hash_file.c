@@ -14,7 +14,16 @@ int show_hash_table(HashTableCell *hash_table, int size, int file_dsc);
 HT_ErrorCode HT_Init()
 {
 	// insert code here
-	BF_Init(LRU);
+	int retval=HT_OK;
+	BF_ErrorCode err = BF_OK;
+
+	err = BF_Init(LRU);
+	if(err != BF_OK)
+	{
+		retval=HT_ERROR;
+		perror("Error initializing BF\n");
+		goto HT_Init_leave;
+	}
 
 	// Make the table for the file descriptors
 	file_table = calloc(MAX_OPEN_FILES, sizeof(content_table_entry));
@@ -25,21 +34,30 @@ HT_ErrorCode HT_Init()
 		file_table[i].hash_table = NULL;
 	}
 
-	return HT_OK;
+HT_Init_leave:
+	if(err != BF_OK)
+	{
+		BF_PrintError(err);
+	}
+
+	return retval;
 }
 
 HT_ErrorCode HT_Close()
 {
 	// insert code here
 	//  Close all files
+	int retval=HT_OK;
+	
 	for (int i = 0; i < MAX_OPEN_FILES; i++)
 	{
 		if (file_table[i].file_desc != -1)
 		{
 			if (HT_CloseFile(i) != HT_OK)
 			{
-				printf("Error closing file %s\n", file_table[i].filename);
-				return HT_ERROR;
+				perror("Error closing file in HT_Close\n");
+				retval=HT_ERROR;
+				goto HT_Close_leave;
 			}
 
 			free(file_table[i].filename);
@@ -51,38 +69,60 @@ HT_ErrorCode HT_Close()
 	// Free the table of contents
 	free(file_table);
 
-	BF_Close();
+	if(BF_Close() != BF_OK)
+	{
+		perror("Error closing BF in HT_Close\n");
+		retval=HT_ERROR;
+	}
 
-	return HT_OK;
+	HT_Close_leave:
+		return retval;
 }
 
 HT_ErrorCode HT_CreateIndex(const char *filename, int depth)
 {
-	// insert code here
-	printf("Creating File %s ...\n", filename);
+	int retval=HT_OK;
 
+	// insert code here
+	printf(":: INFO  :: Creating File %s ...\n", filename);
 	int file_desc;
 
 	// Check if the file exists first and then just open it if it does
 	// Else create the file and catch any errors
 	if (access(filename, F_OK) == 0)
 	{
-		fprintf(stderr, "The file %s already exists\n", filename);
-		return -1;
+		perror("File already exists in HT_CreateIndex\n");
+		retval=HT_ERROR;
+		goto HT_CreateIndex_leave;
 	}
 	else
 	{
-		CALL_BF(BF_CreateFile(filename), "Error creating file in HT_CreateIndex\n");
+		if(BF_CreateFile(filename) != BF_OK)
+		{
+			perror("Error creating file in HT_CreateIndex\n");
+			retval=HT_ERROR;
+			goto HT_CreateIndex_leave;
+		}
 	}
 
 	// Open the file and catch any errors
-	CALL_BF(BF_OpenFile(filename, &file_desc), "Error opening file in HT_CreateIndex\n");
+	if(BF_OpenFile(filename, &file_desc) != BF_OK)
+	{
+		perror("Error opening file in HT_CreateIndex\n");
+		retval=HT_ERROR;
+		goto HT_CreateIndex_leave;
+	}
 
 	// Allocate a block for the first block of the file
 	// The first block will inlude the metadata of the file
 	BF_Block *first_block;
 	BF_Block_Init(&first_block);
-	CALL_BF(BF_AllocateBlock(file_desc, first_block), "Error allocating block in HT_CreateIndex\n");
+	if(BF_AllocateBlock(file_desc, first_block) != BF_OK)
+	{
+		perror("Error allocating block in HT_CreateIndex\n");
+		retval=HT_ERROR;
+		goto HT_CreateIndex_destroy_block_and_leave;
+	}
 
 	// Get the data of the block and cast it to HT_info
 	HT_info *ht_info = (HT_info *)BF_Block_GetData(first_block);
@@ -98,47 +138,61 @@ HT_ErrorCode HT_CreateIndex(const char *filename, int depth)
 
 	// Set the block as dirty because we changed it and unpin it
 	BF_Block_SetDirty(first_block);
-	CALL_BF(BF_UnpinBlock(first_block), "Error unpinning block in HT_CreateIndex\n");
-	BF_Block_Destroy(&first_block);
-
-	// Allocate blocks for the hash table
-	// UpdateHashTable(file_desc, depth);
+	if(BF_UnpinBlock(first_block) != BF_OK)
+	{
+		perror("Error unpinning block in HT_CreateIndex\n");
+		retval=HT_ERROR;
+		goto HT_CreateIndex_destroy_block_and_leave;
+	}
 
 	// Close the file before exiting
-	CALL_BF(BF_CloseFile(file_desc), "Error closing file\n");
+	if(BF_CloseFile(file_desc) != BF_OK)
+	{
+		perror("Error closing file in HT_CreateIndex\n");
+		retval=HT_ERROR;
+	}
 
-	return HT_OK;
+HT_CreateIndex_destroy_block_and_leave:
+	BF_Block_Destroy(&first_block);
+
+HT_CreateIndex_leave:
+	return retval;
 }
 
 HT_ErrorCode HT_OpenIndex(const char *fileName, int *indexDesc)
 {
 
-	printf("Opening file %s ...\n", fileName);
+	printf(":: INFO  :: Opening file %s ...\n", fileName);
+	int retval = HT_OK;
 
 	// Get file descrtiptor for fileName
 	int file_desc;
-	CALL_BF(BF_OpenFile(fileName, &file_desc), "Error opening file in HT_OpenIndex\n");
+
+	if(BF_OpenFile(fileName, &file_desc) != BF_OK)
+	{
+		perror("Error opening file in HT_OpenIndex\n");
+		retval=HT_ERROR;
+		goto HT_OpenIndex_leave;
+	}
 
 	// Pin the first block so it can be easily accessed, without the need to take it from the disk
 	BF_Block *first_block;
 	BF_Block_Init(&first_block);
-	CALL_BF(BF_GetBlock(file_desc, 0, first_block), "Error getting block in HT_OpenIndex\n");
+	if(BF_GetBlock(file_desc, 0, first_block) != BF_OK)
+	{
+		perror("Error getting block in HT_OpenIndex\n");
+		retval=HT_ERROR;
+		goto HT_OpenIndex_destroy_block_and_leave;
+	}
 
 	// Check that the file is a hash table
 	HT_info *ht_info = (HT_info *)BF_Block_GetData(first_block);
 	if (ht_info->type != HashFile)
 	{
-		printf("Error opening file %s\n (File is not a hash table)\n", fileName);
-
-		// Unpin and Destroy the block because we don't need it anymore
-		CALL_BF(BF_UnpinBlock(first_block), "Error unpinning block in HT_OpenIndex\n");
-		BF_Block_Destroy(&first_block);
-
-		return HT_ERROR;
+		fprintf(stderr,"Error opening file %s\n (File is not a hash table)\n", fileName);
+		retval=HT_ERROR;
+		goto HT_OpenIndex_unpin_block_and_leave;
 	}
-
-	// Destroy the block because we don't need it anymore
-	BF_Block_Destroy(&first_block);
 
 	// Update the table of contents
 	int available_index = -1;
@@ -153,106 +207,133 @@ HT_ErrorCode HT_OpenIndex(const char *fileName, int *indexDesc)
 
 	if (available_index == -1)
 	{
-		printf("No space to open the file. MAX_OPEN_FILES = %d\n", MAX_OPEN_FILES);
-		return HT_ERROR;
+		perror("Error opening file in HT_OpenIndex (Maximum amount of open files reached)\n");
+		retval=HT_ERROR;
+		goto HT_OpenIndex_unpin_block_and_leave;
 	}
 
-	printf("File %s opened with file desc %d\n", fileName, file_desc);
+	printf(":: INFO  :: File %s opened with file desc %d at index %d\n", fileName, file_desc, available_index);
 
 	file_table[available_index].file_desc = file_desc;
 	file_table[available_index].filename = malloc(strlen(fileName) + 1);
 	file_table[available_index].hash_table = LoadTableFromDisk(file_desc);
-
-	printf(":: INFO  ::File %s opened with index %d\n", fileName, available_index);
-
-	if (file_table[available_index].hash_table == NULL)
-	{
-		printf(":: INFO  ::File %s has no hash table\n", fileName);
-	}
-	else
-	{
-		printf(":: DEBUG :: Showing hash table...\n");
-		show_hash_table(file_table[available_index].hash_table, 1 << ht_info->global_depth, file_desc);
-	}
-
 	strcpy(file_table[available_index].filename, fileName);
 
 	// Return the index of the file
 	*indexDesc = available_index;
 
-	return HT_OK;
+HT_OpenIndex_unpin_block_and_leave:
+	if(BF_UnpinBlock(first_block) != BF_OK)
+	{
+		retval=HT_ERROR;
+	}
+
+HT_OpenIndex_destroy_block_and_leave:
+	BF_Block_Destroy(&first_block);
+
+HT_OpenIndex_leave:
+	return retval;
 }
 
 HT_ErrorCode HT_CloseFile(int indexDesc)
 {
+	int retval=HT_OK;
 
 	if (indexDesc < 0 || indexDesc > MAX_OPEN_FILES)
 	{
-		printf("Error closing file with index %d\n (Out of range)\n", indexDesc);
-		return HT_ERROR;
+		fprintf(stderr,"Error closing file with index %d\n (Out of range)\n", indexDesc);
+		retval=HT_ERROR;
+		goto HT_CloseFile_leave;
 	}
 
 	// Get the file descriptor from the table of contents
 	int file_desc = file_table[indexDesc].file_desc;
 	if (file_desc == -1)
 	{
-		printf("Error closing file with index %d (File not open)\n", indexDesc);
-		return HT_ERROR;
+		fprintf(stderr,"Error closing file with index %d (File not open)\n", indexDesc);
+		retval=HT_ERROR;
+		goto HT_CloseFile_leave;
 	}
 
 	// Get the first block of the file
 	BF_Block *first_block;
 	BF_Block_Init(&first_block);
-	BF_GetBlock(file_desc, 0, first_block);
+	if(BF_GetBlock(file_desc, 0, first_block) != BF_OK)
+	{
+		retval=HT_ERROR;
+		goto HT_CloseFile_destroy_block_and_leave;
+	}
 
 	// Set the block as dirty because we changed it and unpin it
 	BF_Block_SetDirty(first_block);
-	CALL_BF(BF_UnpinBlock(first_block), "Error unpinning block in HT_CloseFile\n");
-
-	// Destroy the block because we don't need it anymore
-	BF_Block_Destroy(&first_block);
+	if(BF_UnpinBlock(first_block) != BF_OK)
+	{
+		retval=HT_ERROR;
+		goto HT_CloseFile_destroy_block_and_leave;
+	}
 
 	// Close the file
-	CALL_BF(BF_CloseFile(file_desc), "Error closing file in HT_CloseFile\n");
+	if(BF_CloseFile(file_desc) != BF_OK)
+	{
+		retval=HT_ERROR;
+		goto HT_CloseFile_destroy_block_and_leave;
+	}
 
 	// Update the contents table
 	file_table[indexDesc].file_desc = -1;
 	free(file_table[indexDesc].filename);
 	file_table[indexDesc].filename = NULL;
 
-
 	FreeHashTable(file_table[indexDesc].hash_table);
 	file_table[indexDesc].hash_table = NULL;
 
-	return HT_OK;
+	HT_CloseFile_destroy_block_and_leave:
+	BF_Block_Destroy(&first_block);
+
+	HT_CloseFile_leave:
+	return retval;
 }
 
 HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 {
+	int retval=HT_OK;
 	int file_desc = file_table[indexDesc].file_desc;
 
 	if (file_desc == -1)
 	{
-		printf("Error inserting entry in file with index %d (File not open)\n", indexDesc);
-		return HT_ERROR;
+		fprintf(stderr,"(HT_InsertEntry) Error inserting entry in file with index %d (File not open)\n", indexDesc);
+		retval=HT_ERROR;
+		goto HT_InsertEntry_leave;
 	}
 
 	// Get the first block of the file
 	BF_Block *file_metadata_block;
 	BF_Block_Init(&file_metadata_block);
-	BF_GetBlock(file_desc, 0, file_metadata_block);
+	
+	if(BF_GetBlock(file_desc, 0, file_metadata_block) != BF_OK)
+	{
+		perror("Error getting block in HT_InsertEntry\n");
+		retval=HT_ERROR;
+		goto HT_InsertEntry_destroy_metadata_block_and_leave;
+	}
+
 	HT_info *ht_info = (HT_info *)BF_Block_GetData(file_metadata_block);
 
 	int hash_table_size = 1 << ht_info->global_depth;
 	uint hash_value = hash_function(record.id, hash_table_size);
-
-	printf("Inserting record with id %d and hash value %d\n", record.id, hash_value);
 
 	HashTableCell *hash_table;
 
 	if (file_table[indexDesc].hash_table == NULL)
 	{
 		hash_table = CreateHashTable(file_desc, ht_info->global_depth);
+		if(hash_table == NULL)
+		{
+			perror("Error creating hash table in HT_InsertEntry\n");
+			retval=HT_ERROR;
+			goto HT_InsertEntry_destroy_metadata_block_and_leave;
+		}
+
 		file_table[indexDesc].hash_table = hash_table;
 	}
 	else
@@ -282,9 +363,20 @@ HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 	// First case
 	if (record_block_id == -1)	
 	{
-		// Allocate a block for the record to be inserted
-		CALL_BF(BF_GetBlockCounter(file_desc, &record_block_id), "Error getting block counter in DoubleHashTable\n");
-		CALL_BF(BF_AllocateBlock(file_desc, record_block), "Error allocating block in DoubleHashTable\n");
+		if(BF_GetBlockCounter(file_desc, &record_block_id) != BF_OK)
+		{
+			perror("Error getting block counter in HT_InsertEntry\n");
+			retval=HT_ERROR;
+			goto HT_InsertEntry_destroy_record_block_and_leave;
+		}
+		
+		if(BF_AllocateBlock(file_desc, record_block) != BF_OK)
+		{
+			perror("Error allocating block in HT_InsertEntry\n");
+			retval=HT_ERROR;
+			goto HT_InsertEntry_destroy_record_block_and_leave;
+		}
+
 		void* new_block_data = (void *)BF_Block_GetData(record_block);
 		memset(new_block_data, 0, BF_BLOCK_SIZE);
 
@@ -305,7 +397,12 @@ HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 		// Update the friends to the disk as well
 		for(int index = first_friend_index; index <= last_friend_index; index++)
 		{
-			CALL_BF(UpdateHashTableValue(hash_table, index, record_block_id, file_desc), "Error updating hash table in DoubleHashTable\n");
+			if(UpdateHashTableValue(hash_table, index, record_block_id, file_desc) != BF_OK)
+			{
+				perror("Error updating hash table in HT_InsertEntry\n");
+				retval=HT_ERROR;
+				goto HT_InsertEntry_unpin_record_block_and_leave;
+			}
 		}
 
 		InsertRecordInBlock(new_block_data, record, ht_info->number_of_records_per_block);
@@ -315,7 +412,13 @@ HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 
 	// Second case
 	// Now that we know that the block exists we can get it
-	CALL_BF(BF_GetBlock(file_desc, record_block_id, record_block), "Error getting block in DoubleHashTable\n");
+	if(BF_GetBlock(file_desc, record_block_id, record_block) != BF_OK)
+	{
+		perror("Error getting block in HT_InsertEntry\n");
+		retval=HT_ERROR;
+		goto HT_InsertEntry_destroy_record_block_and_leave;
+	}
+	
 	block_data = (void*)BF_Block_GetData(record_block);
 	HT_block_info *block_info = (HT_block_info *)block_data;
 	
@@ -344,15 +447,24 @@ HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 		hash_table_size = 1 << ht_info->global_depth; // Update to the new size of the hash table incase it was doubled
 
 		// Open the new block
-		CALL_BF(BF_GetBlock(file_desc, new_record_block_id, new_record_block), "Error getting block in DoubleHashTable\n");
+		if(BF_GetBlock(file_desc, new_record_block_id, new_record_block) != BF_OK)
+		{
+			perror("Error getting new block in HT_InsertEntry\n");
+			retval=HT_ERROR;
+			BF_Block_Destroy(&new_record_block);
+			goto HT_InsertEntry_unpin_record_block_and_leave;
+		}
 		void* new_block_data = (void *)BF_Block_GetData(new_record_block);
 
 		// Rehash all the records that were in the block
 		int reuturn_value = RehashRecords(block_data, new_block_data, record_block_id, new_record_block_id, hash_table, hash_table_size);
 		if(reuturn_value != 0)
 		{
-			printf("Error rehashing records in DoubleHashTable\n");
-			return HT_ERROR;
+			perror("Error in rehashing in HT_InsertEntry\n");
+			retval=HT_ERROR;
+			BF_UnpinBlock(new_record_block);
+			BF_Block_Destroy(&new_record_block);
+			goto HT_InsertEntry_unpin_record_block_and_leave;
 		}
 
 		// int old_block_id = record_block_id;
@@ -363,11 +475,32 @@ HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 		// Mark both blocks as dirty
 		BF_Block_SetDirty(record_block);
 		BF_Block_SetDirty(new_record_block);
-		CALL_BF(BF_UnpinBlock(record_block), "Error unpinning block in DoubleHashTable\n");
-		CALL_BF(BF_UnpinBlock(new_record_block), "Error unpinning block in DoubleHashTable\n");
+		
+		if(BF_UnpinBlock(new_record_block) != BF_OK)
+		{
+			perror("Error Unpining new block in HT_InsertEntry\n");
+			retval=HT_ERROR;
+			BF_Block_Destroy(&new_record_block);
+			goto HT_InsertEntry_unpin_record_block_and_leave;
+		}
+		
+		if(BF_UnpinBlock(record_block) != BF_OK)
+		{
+			perror("Error unpinning record block in HT_InsertEntry\n");
+			retval=HT_ERROR;
+			BF_Block_Destroy(&new_record_block);
+			goto HT_InsertEntry_destroy_record_block_and_leave;
+		}
 
 		// Load the new block and test again
-		CALL_BF(BF_GetBlock(file_desc, record_block_id, record_block), "Error getting block in DoubleHashTable\n");
+		if(BF_GetBlock(file_desc, record_block_id, record_block) != BF_OK)
+		{
+			perror("Error getting block in HT_InsertEntry\n");
+			retval=HT_ERROR;
+			BF_Block_Destroy(&new_record_block);
+			goto HT_InsertEntry_destroy_record_block_and_leave;
+		}
+
 		block_data = (void*)BF_Block_GetData(record_block);
 		block_info = (HT_block_info *)block_data;
 	}
@@ -376,49 +509,66 @@ HT_ErrorCode HT_InsertEntry(int indexDesc, Record record)
 	// If we have reached the maximum number of splits return error
 	if (split_counter == MAX_SPLITS)
 	{
-		printf("Error inserting entry in file with index %d (Maximum number of splits reached)\n", indexDesc);
-		return HT_ERROR;
+		fprintf(stderr,"Error inserting entry in file with index %d (Maximum number of splits reached)\n", indexDesc);
+		retval=HT_ERROR;
+		goto HT_InsertEntry_unpin_record_block_and_leave;
 	}
 
 	// Insert the record to the right place in the block
 	status = InsertRecordInBlock(block_data, record, ht_info->number_of_records_per_block);
 	if(status != 0)
 	{
-		printf("Error inserting entry in file with index %d (Record not inserted)\n", indexDesc);
-		return HT_ERROR;
+		fprintf(stderr,"Error inserting entry in file with index %d (Record not inserted)\n", indexDesc);
+		retval=HT_ERROR;
+		goto HT_InsertEntry_unpin_record_block_and_leave;
 	}
 
 HT_InsertEntry_inserted:
-
 	// Set the block as dirty because we changed it and unpin it
 	BF_Block_SetDirty(record_block);
-	CALL_BF(BF_UnpinBlock(record_block), "Error unpinning block in HT_InsertEntry\n");
+
+HT_InsertEntry_unpin_record_block_and_leave:
+	if(BF_UnpinBlock(record_block) != BF_OK)
+	{
+		perror("Error unpinning block in HT_InsertEntry\n");
+		retval=HT_ERROR;
+	}
+
+HT_InsertEntry_destroy_record_block_and_leave:
 	BF_Block_Destroy(&record_block);
 
+HT_InsertEntry_destroy_metadata_block_and_leave:
 	// Destroy the first block too without unpinning it
 	BF_Block_Destroy(&file_metadata_block);
-	
-	// Show the hash table after the insertion
-	show_hash_table(file_table[indexDesc].hash_table, hash_table_size, file_desc);
 
-	return HT_OK;
+HT_InsertEntry_leave:
+	return retval;
 }
 
 HT_ErrorCode HT_PrintAllEntries(int indexDesc, int *id)
 {
+	int retval=HT_OK;
+
 	// insert code here
 	int file_desc = file_table[indexDesc].file_desc;
 
 	if (file_desc == -1 || file_table[indexDesc].hash_table == NULL)
 	{
-		printf("Error inserting entry in file with index %d (File not open)\n", indexDesc);
-		return HT_ERROR;
+		fprintf(stderr, "Error inserting entry in file with index %d (File not open)\n", indexDesc);
+		retval=HT_ERROR;
+		goto HT_PrintAllEntries_leave;
 	}
 
 	// Get the metadata block of the file
 	BF_Block *file_metadata_block;
 	BF_Block_Init(&file_metadata_block);
-	BF_GetBlock(file_desc, 0, file_metadata_block);
+
+	if(BF_GetBlock(file_desc, 0, file_metadata_block) != BF_OK)
+	{
+		perror("Error getting block in HT_PrintAllEntries\n");
+		retval=HT_ERROR;
+		goto HT_PrintAllEntries_destroy_metadata_block_and_leave;
+	}
 
 	HT_info *ht_info = (HT_info *)BF_Block_GetData(file_metadata_block);
 
@@ -436,7 +586,12 @@ HT_ErrorCode HT_PrintAllEntries(int indexDesc, int *id)
 
 		int record_block_id = hash_table[hash_value].block_id;
 
-		BF_GetBlock(file_desc, record_block_id, record_block);
+		if(BF_GetBlock(file_desc, record_block_id, record_block) != BF_OK)
+		{
+			perror("Error getting block in HT_PrintAllEntries\n");
+			retval=HT_ERROR;
+			goto HT_PrintAllEntries_destroy_record_block;
+		}
 		void* block_data = (void*)BF_Block_GetData(record_block);
 
 
@@ -455,7 +610,14 @@ HT_ErrorCode HT_PrintAllEntries(int indexDesc, int *id)
 	{
 		// Print all records
 		int total_blocks=0;
-		CALL_BF(BF_GetBlockCounter(file_desc,&total_blocks), "Error getting block counter in HT_PrintAllEntries\n");
+
+		if(BF_GetBlockCounter(file_desc,&total_blocks) != BF_OK)
+		{
+			perror("Error getting block counter in HT_PrintAllEntries\n");
+			retval=HT_ERROR;
+			goto HT_PrintAllEntries_destroy_record_block;
+		}
+
 		bool* seen = calloc(total_blocks,sizeof(bool));
 
 		for (int i = 0; i < hash_table_size; i++)
@@ -469,7 +631,13 @@ HT_ErrorCode HT_PrintAllEntries(int indexDesc, int *id)
 
 			seen[record_block_id]=true;
 
-			BF_GetBlock(file_desc, record_block_id, record_block);
+			if(BF_GetBlock(file_desc, record_block_id, record_block)!= BF_OK)
+			{
+				perror("Error getting block in HT_PrintAllEntries\n");
+				retval=HT_ERROR;
+				goto HT_PrintAllEntries_destroy_record_block;
+			}
+
 			void *block_data = (void *)BF_Block_GetData(record_block);
 
 			printf("Block %d:\n", record_block_id);
@@ -482,29 +650,39 @@ HT_ErrorCode HT_PrintAllEntries(int indexDesc, int *id)
 			printf("\n");
 			// Set the block as dirty because we changed it and unpin it
 			BF_Block_SetDirty(record_block);
-			CALL_BF(BF_UnpinBlock(record_block), "Error unpinning block in DoubleHashTable\n");	
+			
+			if(BF_UnpinBlock(record_block) != BF_OK)
+			{
+				perror("Error unpinning block in HT_PrintAllEntries\n");
+				retval=HT_ERROR;
+				goto HT_PrintAllEntries_destroy_record_block;
+			}
 		}
 
 		free(seen);
 	}
 
+	HT_PrintAllEntries_destroy_record_block:
 	BF_Block_Destroy(&record_block);
 
-	// Destroy the first block too without unpinning it
+	HT_PrintAllEntries_destroy_metadata_block_and_leave:
 	BF_Block_Destroy(&file_metadata_block);
 
-	return HT_OK;
+
+	HT_PrintAllEntries_leave:
+	return retval;
 }
 
 //Statistics
 HT_ErrorCode HashStatistics(char* filename)
 {
+	int retval=HT_OK;
+
 	int total_blocks=0;
 	int hash_table_blocks=0;
 
 	int file_desc=-1;
 	int indexDesc=-1;
-	int retval=HT_OK;
 	bool was_in_table=false;
 
 	// If the file already exists get the index of the file
@@ -553,6 +731,12 @@ HT_ErrorCode HashStatistics(char* filename)
 
 	HashTableCell* hash_table;
 	hash_table = file_table[indexDesc].hash_table;
+
+	if(hash_table==NULL)
+	{
+		perror("Error getting hash table in HashStatistics\n");
+		goto HashStatistics_close_metadata_leave;
+	}
 
 	BF_Block *record_block;
 	BF_Block_Init(&record_block);
