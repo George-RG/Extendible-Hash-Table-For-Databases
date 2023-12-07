@@ -21,7 +21,7 @@
 
 ### General
 
-    In order to have a better understanding of what is going on below, we will first explain some general things about the project.
+In order to have a better understanding of what is going on below, we will first explain some general things about the project.
 
 The structure that we created was made with the following things in mind:
 
