@@ -5,7 +5,7 @@
 
 #include "hash_file.h"
 
-#define RECORDS_NUM 1000000 // you can change it if you want
+#define RECORDS_NUM 1000 // you can change it if you want
 #define GLOBAL_DEPT 2 // you can change it if you want
 #define FILE_NAME "data.db"
 #define FILE_NAME2 "data2.db"
