@@ -8,6 +8,7 @@
 #define RECORDS_NUM 1000 // you can change it if you want
 #define GLOBAL_DEPT 2 // you can change it if you want
 #define FILE_NAME "data.db"
+#define FILE_NAME2 "data2.db"
 
 const char *names[] = {
 	"Yannis",
@@ -89,7 +90,7 @@ int main(void)
 	Record record;
 	srand(12569874);
 	int r;
-	printf("Inserting %d records...\n", RECORDS_NUM);
+	printf("Inserting %d records in data.db...\n", RECORDS_NUM);
 	for (int id = 0; id < RECORDS_NUM; ++id)
 	{
 		// create a record with random data
@@ -102,26 +103,88 @@ int main(void)
 		r = rand() % 10;
 		memcpy(record.city, cities[r], strlen(cities[r]) + 1);
 
-		printf("Record %d: with this data was inserted: %d, %s, %s, %s\n", id, record.id, record.name, record.surname, record.city);
+		printf("Record %d: with this data was inserted: %d, %s, %s, %s\n in data.db", id, record.id, record.name, record.surname, record.city);
 
 		CALL_OR_DIE(HT_InsertEntry(indexDesc, record));
 	}
 
+	// Create a new file
+	HT_CreateIndex(FILE_NAME2, GLOBAL_DEPT);
+
+	// Open the new file
+	int indexDesc2;
+	if(HT_OpenIndex(FILE_NAME2, &indexDesc2) != HT_OK)
+		goto exit_program;
+
+	// Insert some records
+	printf("Inserting %d records in data2.db...\n", RECORDS_NUM);
+	for (int id = 0; id < 10; ++id)
+	{
+		// create a record with random data
+		memset(&record, 0, sizeof(Record));
+		record.id = id;
+		r = rand() % 12;
+		memcpy(record.name, names[r], strlen(names[r]) + 1);
+		r = rand() % 12;
+		memcpy(record.surname, surnames[r], strlen(surnames[r]) + 1);
+		r = rand() % 10;
+		memcpy(record.city, cities[r], strlen(cities[r]) + 1);
+
+		printf("Record %d: with this data was inserted: %d, %s, %s, %s\n in data2.db", id, record.id, record.name, record.surname, record.city);
+
+		CALL_OR_DIE(HT_InsertEntry(indexDesc2, record));
+	}
+
+	// Try printing records that don't exist
+	printf("Trying to print record with ID 10 in data2.db (shouldn't find anything) ...\n");
+	int false_id = 10;
+	HT_PrintAllEntries(indexDesc2, &false_id);
+
+	// Insert a record with an existing ID
+	printf("Inserting record with ID 0 in data2.db... \n");
+	memset(&record, 0, sizeof(Record));
+	record.id = 0;
+	r = rand() % 12;
+	memcpy(record.name, names[r], strlen(names[r]) + 1);
+	r = rand() % 12;
+	memcpy(record.surname, surnames[r], strlen(surnames[r]) + 1);
+	r = rand() % 10;
+	memcpy(record.city, cities[r], strlen(cities[r]) + 1);
+
+	printf("Record %d: with this data was inserted: %d, %s, %s, %s in data2.db\n", 0, record.id, record.name, record.surname, record.city);
+
+	CALL_OR_DIE(HT_InsertEntry(indexDesc2, record));
+
+	// Now try printing the records
+	printf("Printing all entries from data2.db...\n");
+	HT_PrintAllEntries(indexDesc2, NULL);
+
+	// Print the statistics of data2.db
+	printf("Printing statistics of data2.db...\n");
+	HashStatistics(FILE_NAME2);
+
+	// Close the old file (data.db)
 	if (HT_CloseFile(indexDesc) != HT_OK)
 		goto exit_program;
 
+	// Reopen the old file (data.db)
 	if (HT_OpenIndex(FILE_NAME, &indexDesc) != HT_OK)
 		goto exit_program;
 
-	// // Print all entries
-	// printf("Printing all entries...\n");
-	// HT_PrintAllEntries(indexDesc, NULL);
+	// Print all entries of data.db
+	printf("Printing all entries...\n");
+	HT_PrintAllEntries(indexDesc, NULL);
 
-	// Print statistics
+	// Print statistics of data.db
 	printf("Printing statistics...\n");
 	HashStatistics(FILE_NAME);
 
+	// Close the old file (data.db)
 	if (HT_CloseFile(indexDesc) != HT_OK)
+		goto exit_program;
+
+	// Close the new file (data2.db)
+	if (HT_CloseFile(indexDesc2) != HT_OK)
 		goto exit_program;
 
 	if (HT_Close() != HT_OK)

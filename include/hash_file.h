@@ -2,6 +2,7 @@
 #define HASH_FILE_H
 
 #define MAX_OPEN_FILES 20 // Maximum number of open files
+#define MAX_SPLITS 10 // Maximum number of splits before giving up
 
 #include "record.h"
 #include "bf.h"

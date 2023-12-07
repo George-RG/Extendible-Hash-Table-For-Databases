@@ -6,8 +6,6 @@
 
 #include "hash_file.h"
 
-#define MAX_SPLITS 10 // Maximum number of splits before giving up
-
 // The table that contains the file descriptors and the filenames
 content_table_entry* file_table;
 
@@ -69,7 +67,7 @@ HT_ErrorCode HT_CreateIndex(const char *filename, int depth)
 	// Else create the file and catch any errors
 	if (access(filename, F_OK) == 0)
 	{
-		printf("The file %s already exists\n", filename);
+		fprintf(stderr, "The file %s already exists\n", filename);
 		return -1;
 	}
 	else
@@ -456,9 +454,20 @@ HT_ErrorCode HT_PrintAllEntries(int indexDesc, int *id)
 	else
 	{
 		// Print all records
+		int total_blocks=0;
+		CALL_BF(BF_GetBlockCounter(file_desc,&total_blocks), "Error getting block counter in HT_PrintAllEntries\n");
+		bool* seen = calloc(total_blocks,sizeof(bool));
+
 		for (int i = 0; i < hash_table_size; i++)
 		{
 			int record_block_id = hash_table[i].block_id;
+
+			if(record_block_id==-1 || seen[record_block_id]==true)
+			{
+				continue;
+			}
+
+			seen[record_block_id]=true;
 
 			BF_GetBlock(file_desc, record_block_id, record_block);
 			void *block_data = (void *)BF_Block_GetData(record_block);
@@ -475,6 +484,8 @@ HT_ErrorCode HT_PrintAllEntries(int indexDesc, int *id)
 			BF_Block_SetDirty(record_block);
 			CALL_BF(BF_UnpinBlock(record_block), "Error unpinning block in DoubleHashTable\n");	
 		}
+
+		free(seen);
 	}
 
 	BF_Block_Destroy(&record_block);
@@ -483,53 +494,6 @@ HT_ErrorCode HT_PrintAllEntries(int indexDesc, int *id)
 	BF_Block_Destroy(&file_metadata_block);
 
 	return HT_OK;
-}
-
-//////////////////////////////////////////////// HELPERS //////////////////////////////////////////////////
-
-// Show all files in content table
-void show_files(void)
-{
-	printf(":: DEBUG :: Showing files...\n");
-	for (int i = 0; i < MAX_OPEN_FILES; i++)
-	{
-		if (file_table[i].file_desc != -1 && file_table[i].filename != NULL)
-			printf(":: DEBUG :: File %d: %s with file desc %d\n", i, file_table[i].filename, file_table[i].file_desc);
-	}
-}
-
-// Show hash table
-int show_hash_table(HashTableCell *hash_table, int size, int file_dsc)
-{
-	// Create a block to get the data from the hash table
-	BF_Block *block;
-	BF_Block_Init(&block);
-
-
-	printf(":: DEBUG :: Showing hash table...\n");
-	for (int i = 0; i < size; i++)
-	{
-		int block_id = hash_table[i].block_id;
-
-		if(block_id == -1)
-		{
-			printf(":: DEBUG :: Hash table cell %d: block_id %d\n", i, block_id);
-			continue;
-		}
-
-		BF_GetBlock(file_dsc, block_id, block);
-		void *block_data = (void *)BF_Block_GetData(block);
-		HT_block_info *block_info = (HT_block_info *)block_data;
-
-		printf(":: DEBUG :: Hash table cell %d: block_id %d with local depth %d and %d entries\n", i, block_id, block_info->local_depth, block_info->number_of_records_on_block);
-	
-		// Unpin the block
-		CALL_BF(BF_UnpinBlock(block), "Error unpinning block in show_hash_table\n");
-	}
-
-	BF_Block_Destroy(&block);
-
-	return 0;
 }
 
 //Statistics
@@ -646,9 +610,9 @@ HT_ErrorCode HashStatistics(char* filename)
 	printf("├──Hash table blocks: %d\n",hash_table_blocks);
 	printf("├──Data blocks: %d\n",total_blocks-hash_table_blocks - 1);
 	printf("└──Metadata block: 1\n");
-	printf("Max records per block: %d\n",max_records);
-	printf("Min records per block: %d\n",min_records);
-	printf("Average records per block: %f\n",(float)total_records/(float)(total_blocks-hash_table_blocks - 1));
+	printf("Max records per block: %d/%d\n",max_records, ht_info->number_of_records_per_block);
+	printf("Min records per block: %d/%d\n",min_records, ht_info->number_of_records_per_block);
+	printf("Average records per block: %f/%d\n",(float)total_records/(float)(total_blocks-hash_table_blocks - 1),ht_info->number_of_records_per_block);
 
 	retval=HT_OK;
 
@@ -667,4 +631,51 @@ HT_ErrorCode HashStatistics(char* filename)
 
 	HashStatistics_leave:
 		return retval;
+}
+
+//////////////////////////////////////////////// HELPERS //////////////////////////////////////////////////
+
+// Show all files in content table
+void show_files(void)
+{
+	printf(":: DEBUG :: Showing files...\n");
+	for (int i = 0; i < MAX_OPEN_FILES; i++)
+	{
+		if (file_table[i].file_desc != -1 && file_table[i].filename != NULL)
+			printf(":: DEBUG :: File %d: %s with file desc %d\n", i, file_table[i].filename, file_table[i].file_desc);
+	}
+}
+
+// Show hash table
+int show_hash_table(HashTableCell *hash_table, int size, int file_dsc)
+{
+	// Create a block to get the data from the hash table
+	BF_Block *block;
+	BF_Block_Init(&block);
+
+
+	printf(":: DEBUG :: Showing hash table...\n");
+	for (int i = 0; i < size; i++)
+	{
+		int block_id = hash_table[i].block_id;
+
+		if(block_id == -1)
+		{
+			printf(":: DEBUG :: Hash table cell %d: block_id %d\n", i, block_id);
+			continue;
+		}
+
+		BF_GetBlock(file_dsc, block_id, block);
+		void *block_data = (void *)BF_Block_GetData(block);
+		HT_block_info *block_info = (HT_block_info *)block_data;
+
+		printf(":: DEBUG :: Hash table cell %d: block_id %d with local depth %d and %d entries\n", i, block_id, block_info->local_depth, block_info->number_of_records_on_block);
+	
+		// Unpin the block
+		CALL_BF(BF_UnpinBlock(block), "Error unpinning block in show_hash_table\n");
+	}
+
+	BF_Block_Destroy(&block);
+
+	return 0;
 }

@@ -37,7 +37,7 @@ typedef enum {
 HashTableCell* CreateHashTable(int file_dsc, int depth);
 HashTableCell* LoadTableFromDisk(int file_dsc);
 HashTableCell* DoubleHashTable(int file_dsc, int old_depth, HashTableCell* hash_table_old);
-HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table, uint hash_value, int* created_block_id);
+HashTableCell* SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table, uint hash_value, int* created_block_id);
 BF_ErrorCode UpdateHashTableValue(HashTableCell *hashtable, int index, int value, int file_dsc);
 int FreeHashTable(HashTableCell* hash_table);
 

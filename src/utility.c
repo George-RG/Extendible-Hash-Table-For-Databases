@@ -464,38 +464,6 @@ UpdateHashTableValue_error_exit:
 	return BF_ERROR;
 }
 
-// uint hash_function(unsigned int x, unsigned int size)
-// {
-
-// 	// Check if size is a power of 2
-// 	if ((size & (size - 1)) != 0)
-// 	{
-// 		fprintf(stderr, "Error in hash_function. Size is not a poower of 2\n");
-// 		return -1;
-// 	}
-
-// 	// Find the number of bits needed to represent size
-// 	// 8 - 1 = 1000 - 0001 = 00000000 00000000 00000000 00000111 
-
-// 	int leading_zeros = __builtin_clz(size - 1);
-// 	// int number_of_bits = 32 - leading_zeros;
-
-// 	// Keep the number of bits needed to represent size
-
-// 	// x = 00000000 00000000 01010001 01010111
-// 	// y = 00000000 00000000 00000000 01111111 
-
-// 	// new_x = 00000000 00000000 00000000 01010111
-
-
-// 	// int new_x = x & ((1 << number_of_bits) - 1);
-// 	// return new_x;
-
-// 	return x >> leading_zeros;
-
-// 	// return x % size;
-// }
-
 #define FNV_offset_basis 2166136261
 #define FNV_prime 16777619
 
