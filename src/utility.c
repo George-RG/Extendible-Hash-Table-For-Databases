@@ -428,9 +428,7 @@ HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table,
 	if (block_info->local_depth == ht_info->global_depth) // Case 2
 	{
 		// Double the hash table
-		printf(":: DEBUG :: Doubling hash table...\n");
 		hash_table = DoubleHashTable(file_dsc, ht_info->global_depth, hash_table);
-		show_hash_table(hash_table, ht_info->global_depth, file_dsc);
 		if (hash_table == NULL)
 		{
 			perror("Error in SplitBlock - Error doubling hash table\n");
