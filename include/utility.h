@@ -46,4 +46,6 @@ uint hash_function(uint x, size_t size);
 int InsertRecordInBlock(void* data,Record record, int max_records);
 int RehashRecords(void* block_data, void* new_block_data, int record_block_id, int new_record_block_id, HashTableCell* hash_table, uint hash_table_size);
 
+
+int show_hash_table(HashTableCell *hash_table, int size, int file_dsc);
 #endif // UTILITY_H

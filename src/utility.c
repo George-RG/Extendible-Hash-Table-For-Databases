@@ -428,7 +428,9 @@ HashTableCell *SplitBlock(int block_id, int file_dsc, HashTableCell *hash_table,
 	if (block_info->local_depth == ht_info->global_depth) // Case 2
 	{
 		// Double the hash table
+		printf(":: DEBUG :: Doubling hash table...\n");
 		hash_table = DoubleHashTable(file_dsc, ht_info->global_depth, hash_table);
+		show_hash_table(hash_table, ht_info->global_depth, file_dsc);
 		if (hash_table == NULL)
 		{
 			perror("Error in SplitBlock - Error doubling hash table\n");
@@ -727,6 +729,41 @@ int RehashRecords(void *block_data, void *new_block_data, int record_block_id, i
 
 	// Fill the rest of the block with zeros
 	memset(records_array_in_block + records_in_old_block, 0, (BF_BLOCK_SIZE - sizeof(HT_block_info) - records_in_old_block * sizeof(Record)));
+
+	return 0;
+}
+
+
+// Show hash table
+int show_hash_table(HashTableCell *hash_table, int size, int file_dsc)
+{
+	// Create a block to get the data from the hash table
+	BF_Block *block;
+	BF_Block_Init(&block);
+
+
+	printf(":: DEBUG :: Showing hash table...\n");
+	for (int i = 0; i < size; i++)
+	{
+		int block_id = hash_table[i].block_id;
+
+		if(block_id == -1)
+		{
+			printf(":: DEBUG :: Hash table cell %d: block_id %d\n", i, block_id);
+			continue;
+		}
+
+		BF_GetBlock(file_dsc, block_id, block);
+		void *block_data = (void *)BF_Block_GetData(block);
+		HT_block_info *block_info = (HT_block_info *)block_data;
+
+		printf(":: DEBUG :: Hash table cell %d: block_id %d with local depth %d and %d entries\n", i, block_id, block_info->local_depth, block_info->number_of_records_on_block);
+	
+		// Unpin the block
+		CALL_BF(BF_UnpinBlock(block), "Error unpinning block in show_hash_table\n");
+	}
+
+	BF_Block_Destroy(&block);
 
 	return 0;
 }

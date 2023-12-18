@@ -9,8 +9,6 @@
 // The table that contains the file descriptors and the filenames
 content_table_entry* file_table;
 
-int show_hash_table(HashTableCell *hash_table, int size, int file_dsc);
-
 HT_ErrorCode HT_Init()
 {
 	// insert code here
@@ -828,38 +826,4 @@ void show_files(void)
 		if (file_table[i].file_desc != -1 && file_table[i].filename != NULL)
 			printf(":: DEBUG :: File %d: %s with file desc %d\n", i, file_table[i].filename, file_table[i].file_desc);
 	}
-}
-
-// Show hash table
-int show_hash_table(HashTableCell *hash_table, int size, int file_dsc)
-{
-	// Create a block to get the data from the hash table
-	BF_Block *block;
-	BF_Block_Init(&block);
-
-
-	printf(":: DEBUG :: Showing hash table...\n");
-	for (int i = 0; i < size; i++)
-	{
-		int block_id = hash_table[i].block_id;
-
-		if(block_id == -1)
-		{
-			printf(":: DEBUG :: Hash table cell %d: block_id %d\n", i, block_id);
-			continue;
-		}
-
-		BF_GetBlock(file_dsc, block_id, block);
-		void *block_data = (void *)BF_Block_GetData(block);
-		HT_block_info *block_info = (HT_block_info *)block_data;
-
-		printf(":: DEBUG :: Hash table cell %d: block_id %d with local depth %d and %d entries\n", i, block_id, block_info->local_depth, block_info->number_of_records_on_block);
-	
-		// Unpin the block
-		CALL_BF(BF_UnpinBlock(block), "Error unpinning block in show_hash_table\n");
-	}
-
-	BF_Block_Destroy(&block);
-
-	return 0;
 }
